@@ -5,7 +5,7 @@
 
 #EPICS_BASE=/usr/local/iocapps/R3.14.8.2/base/3-14-8-2-asd1
 
-EPICS_BASE=/home/epics/R3.14.7/base
+EPICS_BASE=/home/epics/R3.14.8.2/base
 TEMPLATE_TOP=$(EPICS_BASE)/templates/makeBaseApp/top
 
 #
