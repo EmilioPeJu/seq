@@ -1,0 +1,3 @@
+#RELEASE.windows-x64 Location of external products
+
+EPICS_BASE=D:\epics/3.14.12.1/base
