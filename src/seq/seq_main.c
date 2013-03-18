@@ -2,7 +2,7 @@
 Copyright (c) 1990-1994 The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -25,7 +25,7 @@ static PVTYPE *find_type(const char *userType);
  * Creates the initial state program thread and returns its thread id.
  * Most initialization is performed here.
  */
-epicsShareFunc void epicsShareAPI seq(
+epicsShareFunc epicsThreadId epicsShareAPI seq(
 	seqProgram *seqProg, const char *macroDef, unsigned stackSize)
 {
 	epicsThreadId	tid;
@@ -34,14 +34,17 @@ epicsShareFunc void epicsShareAPI seq(
 	const char	*threadName;
 	unsigned int	smallStack;
 
+	/* Register this program (if not yet done) */
+	seqRegisterSequencerProgram(seqProg);
+
 	/* Print version & date of sequencer */
-	printf(SEQ_VERSION "\n");
+	printf(SEQ_RELEASE "\n");
 
 	/* Exit if no parameters specified */
 	if (!seqProg)
 	{
 		errlogSevPrintf(errlogFatal, "seq: bad first argument seqProg (is NULL)\n");
-		return;
+		return 0;
 	}
 
 	/* Check for correct state program format */
@@ -50,14 +53,14 @@ epicsShareFunc void epicsShareAPI seq(
 		errlogSevPrintf(errlogFatal, "seq: illegal magic number in state program.\n"
 			"      - probable mismatch between SNC & SEQ versions\n"
 			"      - re-compile your program?\n");
-		return;
+		return 0;
 	}
 
 	sp = new(SPROG);
 	if (!sp)
 	{
 		errlogSevPrintf(errlogFatal, "seq: calloc failed\n");
-		return;
+		return 0;
 	}
 
 	/* Parse the macro definitions from the "program" statement */
@@ -68,7 +71,7 @@ epicsShareFunc void epicsShareAPI seq(
 
 	/* Initialize program struct */
 	if (!init_sprog(sp, seqProg))
-		return;
+		return 0;
 
 	/* Specify stack size */
 	if (stackSize == 0)
@@ -119,11 +122,13 @@ epicsShareFunc void epicsShareAPI seq(
 	if (!tid)
 	{
 		errlogSevPrintf(errlogFatal, "seq: epicsThreadCreate failed");
-		return;
+		return 0;
 	}
 
 	printf("Spawning sequencer program \"%s\", thread %p: \"%s\"\n",
 		sp->progName, tid, threadName);
+
+	return tid;
 }
 
 /*
@@ -191,6 +196,8 @@ static boolean init_sprog(SPROG *sp, seqProgram *seqProg)
 		errlogSevPrintf(errlogFatal, "init_sprog: calloc failed\n");
 		return FALSE;
 	}
+	/* NOTE: event flags count from 1 upward */
+	sp->syncedChans = newArray(CHAN*, sp->numEvFlags+1);
 
 	/* Allocate and initialize syncQ queues */
 	if (sp->numQueues > 0)
@@ -368,7 +375,14 @@ static boolean init_chan(SPROG *sp, CHAN *ch, seqChan *seqChan)
 	ch->offset = seqChan->offset;
 	ch->count = seqChan->count;
 	if (ch->count == 0) ch->count = 1;
-	ch->efId = seqChan->efId;
+	ch->syncedTo = seqChan->efId;
+	if (ch->syncedTo)
+	{
+		/* insert into syncedTo list for this event flag */
+		CHAN *fst = sp->syncedChans[ch->syncedTo];
+		sp->syncedChans[ch->syncedTo] = ch;
+		ch->nextSynced = fst;
+	}
 	ch->monitored = seqChan->monitored;
 	ch->eventNum = seqChan->eventNum;
 
@@ -382,19 +396,19 @@ static boolean init_chan(SPROG *sp, CHAN *ch, seqChan *seqChan)
 	}
 
 	DEBUG("  varname=%s, count=%u\n"
-		"  efId=%u, monitored=%u, eventNum=%u\n",
+		"  syncedTo=%u, monitored=%u, eventNum=%u\n",
 		ch->varName, ch->count,
-		ch->efId, ch->monitored, ch->eventNum);
+		ch->syncedTo, ch->monitored, ch->eventNum);
 	DEBUG("  type=%p: typeStr=%s, putType=%d, getType=%d, size=%d\n",
 		ch->type, ch->type->typeStr,
 		ch->type->putType, ch->type->getType, ch->type->size);
 
-	if (seqChan->chName)
+	if (seqChan->chName)	/* skip anonymous PVs */
 	{
 		char name_buffer[100];
 
 		seqMacEval(sp, seqChan->chName, name_buffer, sizeof(name_buffer));
-		if (name_buffer[0])
+		if (name_buffer[0])	/* skip anonymous PVs */
 		{
 			DBCHAN	*dbch = new(DBCHAN);
 			if (!dbch)
@@ -418,6 +432,9 @@ static boolean init_chan(SPROG *sp, CHAN *ch, seqChan *seqChan)
 				}
 			}
 			ch->dbch = dbch;
+			sp->assignCount++;
+			if (ch->monitored)
+				sp->monitorCount++;
 			DEBUG("  assigned name=%s, expanded name=%s\n",
 				seqChan->chName, ch->dbch->dbName);
 		}
@@ -568,6 +585,7 @@ void seq_free(SPROG *sp)
 	free(sp->queues);
 
 	free(sp->evFlags);
+	free(sp->syncedChans);
 	if (sp->options & OPT_REENT) free(sp->var);
 	free(sp);
 }

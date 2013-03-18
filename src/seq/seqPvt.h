@@ -2,7 +2,7 @@
 Copyright (c) 1991-1993 The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -33,8 +33,11 @@ in the file LICENSE that is included with this distribution.
 #ifndef	INCLseqPvth
 #define	INCLseqPvth
 
-#include "seq_queue.h"
 #include "seqCom.h"
+#define boolean seqBool
+#define bitMask seqMask
+
+#include "seq_queue.h"
 
 #define valPtr(ch,ss)		((char*)(ss)->var+(ch)->offset)
 #define bufPtr(ch)		((char*)(ch)->sprog->var+(ch)->offset)
@@ -62,7 +65,7 @@ in the file LICENSE that is included with this distribution.
 #define max(x, y)		(((x) < (y)) ? (y) : (x))
 #endif
 
-#define free(p)			{DEBUG("%s:%d:free(%p)\n",__FILE__,__LINE__,p); free(p); p=0;}
+#define free(p)			{DEBUG("%s:%d:free(%p)\n",__FILE__,__LINE__,p); if(p){free(p); p=0;}}
 
 /* Generic allocation */
 #define newArray(type,count)	(DEBUG("%s:%d:calloc(%u,%u)\n",__FILE__,__LINE__,count,sizeof(type)),(type *)calloc(count, sizeof(type)))
@@ -91,7 +94,8 @@ struct channel
 
 	/* dynamic channel data (assigned at runtime) */
 	DBCHAN		*dbch;		/* channel assigned to a named db pv */
-	EV_ID		efId;		/* event flag id if synced */
+	EV_ID		syncedTo;	/* event flag id if synced */
+	CHAN		*nextSynced;	/* next channel synced to same flag */
 	QUEUE		queue;		/* queue if queued */
 	boolean		monitored;	/* whether channel is monitored */
 	/* buffer access, only used in safe mode */
@@ -189,6 +193,7 @@ struct program_instance
 	epicsMutexId	programLock;	/* mutex for locking dynamic program data */
         /* the following five members must always be protected by programLock */
 	bitMask		*evFlags;	/* event bits for event flags & channels */
+	CHAN		**syncedChans;	/* for each event flag, start of synced list */
 	unsigned	assignCount;	/* number of channels assigned to ext. pv */
 	unsigned	connectCount;	/* number of channels connected */
 	unsigned	monitorCount;	/* number of channels monitored */
@@ -220,6 +225,7 @@ struct pvreq
 void sequencer (void *arg);
 void ss_write_buffer(CHAN *ch, void *val, PVMETA *meta, boolean dirtify);
 void ss_read_buffer(SSCB *ss, CHAN *ch, boolean dirty_only);
+void ss_read_buffer_selective(SPROG *sp, SSCB *ss, EV_ID ev_flag);
 void seqWakeup(SPROG *sp, unsigned eventNum);
 void seqCreatePvSys(SPROG *sp);
 /* seq_mac.c */

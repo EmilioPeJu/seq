@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -29,20 +29,43 @@ struct sequencerProgram {
 static struct sequencerProgram *seqHead;
 static epicsMutexId seqLock;
 
-/*
- * This routine is called before multitasking has started, so there's
- * no race condition in creating the linked list or the lock.
- */
-epicsShareFunc void epicsShareAPI seqRegisterSequencerProgram(seqProgram *p)
+static void seqInitPvt(void *arg)
 {
-    struct sequencerProgram *sp;
+    seqLock = epicsMutexCreate();
+    if (!seqLock) {
+        errlogSevPrintf(errlogFatal, "seqInitPvt: out of memory");
+        exit(EXIT_FAILURE);
+    }
+}
 
-    seqLock = epicsMutexMustCreate();
-    sp = (struct sequencerProgram *)mallocMustSucceed(sizeof *sp, "seqRegisterSequencerProgram");
-    sp->prog = p;
-    sp->next = seqHead;
-    sp->instances = NULL;
-    seqHead = sp;
+static void seqLazyInit()
+{
+    static epicsThreadOnceId seqOnceFlag = EPICS_THREAD_ONCE_INIT;
+    epicsThreadOnce(&seqOnceFlag, seqInitPvt, NULL);
+}
+
+epicsShareFunc void epicsShareAPI seqRegisterSequencerProgram(seqProgram *prog)
+{
+    struct sequencerProgram *sp = NULL;
+
+    seqLazyInit();
+    epicsMutexMustLock(seqLock);
+    foreach(sp, seqHead) {
+        if (sp->prog == prog) {
+            break;
+        }
+    }
+    if (!sp) {
+        sp = (struct sequencerProgram *)malloc(sizeof *sp);
+        if (!sp) {
+            errlogSevPrintf(errlogFatal, "seqRegisterSequencerProgram: out of memory");
+        }
+        sp->prog = prog;
+        sp->next = seqHead;
+        sp->instances = NULL;
+        seqHead = sp;
+    }
+    epicsMutexUnlock(seqLock);
 }
 
 int traverseSequencerPrograms(sequencerProgramTraversee *traversee, void *param)
@@ -50,6 +73,7 @@ int traverseSequencerPrograms(sequencerProgramTraversee *traversee, void *param)
     struct sequencerProgram *sp;
     int stop = FALSE;
 
+    seqLazyInit();
     epicsMutexMustLock(seqLock);
     foreach(sp, seqHead) {
         stop = traversee(&sp->instances, sp->prog, param);
@@ -82,7 +106,7 @@ static epicsThreadId findThread(const char *name)
 }
 
 /* seq */
-static const iocshArg seqArg0 = { "sequencer",iocshArgString};
+static const iocshArg seqArg0 = { "program/threadID",iocshArgString};
 static const iocshArg seqArg1 = { "macro definitions",iocshArgString};
 static const iocshArg seqArg2 = { "stack size",iocshArgInt};
 static const iocshArg * const seqArgs[3] = { &seqArg0,&seqArg1,&seqArg2 };
@@ -104,17 +128,23 @@ static void seqCallFunc(const iocshArgBuf *args)
     }
     if (*table == '&')
         table++;
+    seqLazyInit();
+    epicsMutexMustLock(seqLock);
     foreach(sp, seqHead) {
         if (!strcmp(table, sp->prog->progName)) {
-            seq(sp->prog, macroDef, (unsigned)stackSize);
-            return;
+            break;
         }
     }
-    printf("Can't find sequencer `%s'.\n", table);
+    epicsMutexUnlock(seqLock);
+    if (sp) {
+        seq(sp->prog, macroDef, (unsigned)stackSize);
+    } else {
+        printf("Can't find sequencer `%s'.\n", table);
+    }
 }
 
 /* seqShow */
-static const iocshArg seqShowArg0 = { "sequencer",iocshArgString};
+static const iocshArg seqShowArg0 = { "program/threadID",iocshArgString};
 static const iocshArg * const seqShowArgs[1] = {&seqShowArg0};
 static const iocshFuncDef seqShowFuncDef = {"seqShow",1,seqShowArgs};
 static void seqShowCallFunc(const iocshArgBuf *args)
@@ -129,7 +159,7 @@ static void seqShowCallFunc(const iocshArgBuf *args)
 }
 
 /* seqQueueShow */
-static const iocshArg seqQueueShowArg0 = { "sequencer",iocshArgString};
+static const iocshArg seqQueueShowArg0 = { "program/threadID",iocshArgString};
 static const iocshArg * const seqQueueShowArgs[1] = {&seqQueueShowArg0};
 static const iocshFuncDef seqQueueShowFuncDef = {"seqQueueShow",1,seqQueueShowArgs};
 static void seqQueueShowCallFunc(const iocshArgBuf *args)
@@ -146,7 +176,7 @@ static void seqQueueShowCallFunc(const iocshArgBuf *args)
 }
 
 /* seqStop */
-static const iocshArg seqStopArg0 = { "sequencer",iocshArgString};
+static const iocshArg seqStopArg0 = { "program/threadID",iocshArgString};
 static const iocshArg * const seqStopArgs[1] = {&seqStopArg0};
 static const iocshFuncDef seqStopFuncDef = {"seqStop",1,seqStopArgs};
 static void seqStopCallFunc(const iocshArgBuf *args)
@@ -163,7 +193,7 @@ static void seqStopCallFunc(const iocshArgBuf *args)
 }
 
 /* seqChanShow */
-static const iocshArg seqChanShowArg0 = { "sequencer",iocshArgString};
+static const iocshArg seqChanShowArg0 = { "program/threadID",iocshArgString};
 static const iocshArg seqChanShowArg1 = { "channel",iocshArgString};
 static const iocshArg * const seqChanShowArgs[2] = {&seqChanShowArg0,&seqChanShowArg1};
 static const iocshFuncDef seqChanShowFuncDef = {"seqChanShow",2,seqChanShowArgs};

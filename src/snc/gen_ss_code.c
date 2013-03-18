@@ -2,7 +2,7 @@
 Copyright (c) 1990      The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -18,85 +18,15 @@ in the file LICENSE that is included with this distribution.
 #include	"analysis.h"
 #include	"gen_code.h"
 #include	"main.h"
-#include	"sym_table.h"
+#include	"builtin.h"
 #include	"gen_ss_code.h"
 
 static const int impossible = 0;
 
-struct const_symbol
-{
-	const char	*name;
-	int		value;
-};
-
-static struct const_symbol const_symbols[] =
-{
-	{"TRUE",	1},
-	{"FALSE",	0},
-	{"SYNC",	2},
-	{"ASYNC",	1},
-	{NULL,		0}
-};
-
-enum
-{
-	FT_DELAY,
-	FT_EVENT,
-	FT_PV,
-	FT_OTHER
-};
-
-struct func_symbol
-{
-	const char	*name;
-	uint		type:2;
-	uint		add_length:1;
-	uint		default_args:2;
-	uint		ef_action_only:1;
-	uint		ef_args:1;
-};
-
-static struct func_symbol func_symbols[] =
-{
-	{"delay",		FT_DELAY,	FALSE,	0,	FALSE,	FALSE},
-	{"efClear",		FT_EVENT,	FALSE,	0,	TRUE,	FALSE},
-	{"efSet",		FT_EVENT,	FALSE,	0,	TRUE,	FALSE},
-	{"efTest",		FT_EVENT,	FALSE,	0,	FALSE,	FALSE},
-	{"efTestAndClear",	FT_EVENT,	FALSE,	0,	FALSE,	FALSE},
-	{"macValueGet",		FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{"optGet",		FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{"pvAssign",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvAssignCount",	FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{"pvAssigned",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvChannelCount",	FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{"pvConnectCount",	FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{"pvConnected",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvCount",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvDisconnect",	FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvFlush",		FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{"pvFlushQ",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvFreeQ",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvGet",		FT_PV,		FALSE,	1,	FALSE,	FALSE},
-	{"pvGetComplete",	FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvGetQ",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvIndex",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvMessage",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvMonitor",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvName",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvPut",		FT_PV,		FALSE,	1,	FALSE,	FALSE},
-	{"pvPutComplete",	FT_PV,		TRUE,	2,	FALSE, 	FALSE},
-	{"pvSeverity",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvStatus",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvStopMonitor",	FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"pvSync",		FT_PV,		FALSE,	0,	FALSE,	TRUE },
-	{"pvTimeStamp",		FT_PV,		FALSE,	0,	FALSE,	FALSE},
-	{"seqLog",		FT_OTHER,	FALSE,	0,	FALSE,	FALSE},
-	{NULL,			FT_OTHER,	FALSE,	0,	FALSE,	FALSE}
-};
-
 static void gen_local_var_decls(Expr *scope, int level);
 static void gen_state_func(
 	const char *ss_name,
+	uint ss_num,
 	const char *state_name,
 	Expr *xp,
 	void (*gen_body)(Expr *xp),
@@ -116,7 +46,7 @@ static void gen_ef_func(int context, Expr *ep, const char *func_name, uint ef_ac
 static void gen_pv_func(int context, Expr *ep,
 	const char *func_name, uint add_length, uint num_params, uint ef_args);
 static int gen_builtin_func(int context, Expr *ep);
-static int gen_builtin_const(int context, Expr *ep);
+static int gen_builtin_const(Expr *ep);
 
 static void gen_prog_func(
 	Expr *prog,
@@ -147,49 +77,11 @@ enum expr_context
 static int global_opt_reent;
 static SymTable global_sym_table;
 
-static void register_special_funcs(void)
-{
-	struct func_symbol *sym;
-
-	for (sym = func_symbols; sym->name; sym++)
-	{
-		/* use address of func_symbols array as the symbol type */
-		sym_table_insert(global_sym_table, sym->name, func_symbols, sym);
-	}
-}
-
-static struct func_symbol *lookup_func(const char *func_name)
-{
-	return (struct func_symbol *)sym_table_lookup(
-		global_sym_table, func_name, func_symbols);
-}
-
-static void register_special_consts(void)
-{
-	struct const_symbol *sym;
-
-	for (sym = const_symbols; sym->name; sym++)
-	{
-		/* use address of const_symbols array as the symbol type */
-		sym_table_insert(global_sym_table, sym->name, const_symbols, sym);
-	}
-}
-
-static struct const_symbol *lookup_const(const char *const_name)
-{
-	return (struct const_symbol *)sym_table_lookup(
-		global_sym_table, const_name, const_symbols);
-}
-
 void init_gen_ss_code(Program *program)
 {
 	/* HACK: intialise globals */
 	global_opt_reent = program->options.reent;
 	global_sym_table = program->sym_table;
-
-	/* Insert special names into symbol table */
-	register_special_funcs();
-	register_special_consts();
 }
 
 /* Generate state set C code from analysed syntax tree */
@@ -198,6 +90,7 @@ void gen_ss_code(Program *program)
 	Expr	*prog = program->prog;
 	Expr	*ssp;
 	Expr	*sp;
+	uint	ss_num = 0;
 
 	/* Generate program init func */
 	gen_prog_init_func(prog, program->options.reent);
@@ -217,28 +110,29 @@ void gen_ss_code(Program *program)
 
 			/* Generate entry and exit functions */
 			if (sp->state_entry != 0)
-				gen_state_func(ssp->value, sp->value, 
+				gen_state_func(ssp->value, ss_num, sp->value, 
 					sp->state_entry, gen_entry_body,
 					"Entry", "I", "void", "");
 			if (sp->state_exit != 0)
-				gen_state_func(ssp->value, sp->value,
+				gen_state_func(ssp->value, ss_num, sp->value,
 					sp->state_exit, gen_exit_body,
 					"Exit", "O", "void", "");
 			/* Generate function to set up for delay processing */
-			gen_state_func(ssp->value, sp->value,
+			gen_state_func(ssp->value, ss_num, sp->value,
 				sp->state_whens, gen_delay_body,
 				"Delay", "D", "void", "");
 			/* Generate event processing function */
-			gen_state_func(ssp->value, sp->value,
+			gen_state_func(ssp->value, ss_num, sp->value,
 				sp->state_whens, gen_event_body,
-				"Event", "E", "boolean",
+				"Event", "E", "seqBool",
 				", int *pTransNum, int *pNextState");
 			/* Generate action processing function */
-			gen_state_func(ssp->value, sp->value,
+			gen_state_func(ssp->value, ss_num, sp->value,
 				sp->state_whens, gen_action_body,
 				"Action", "A", "void",
                                 ", int transNum, int *pNextState");
 		}
+		ss_num++;
 	}
 
 	/* Generate program exit func */
@@ -311,6 +205,7 @@ void gen_var_init(Var *vp, int level)
 
 static void gen_state_func(
 	const char *ss_name,
+	uint ss_num,
 	const char *state_name,
 	Expr *xp,
 	void (*gen_body)(Expr *xp),
@@ -322,8 +217,8 @@ static void gen_state_func(
 {
 	printf("\n/* %s function for state \"%s\" in state set \"%s\" */\n",
  		title, state_name, ss_name);
-	printf("static %s %s_%s_%s(SS_ID ssId, struct %s *pVar%s)\n{\n",
-		rettype, prefix, ss_name, state_name, VAR_PREFIX, extra_args);
+	printf("static %s %s_%s_%d_%s(SS_ID ssId, struct %s *pVar%s)\n{\n",
+		rettype, prefix, ss_name, ss_num, state_name, VAR_PREFIX, extra_args);
 	gen_body(xp);
 	printf("}\n");
 }
@@ -617,7 +512,7 @@ static void gen_expr(
 		printf("]");
 		break;
 	case E_CONST:
-		if (gen_builtin_const(context, ep))
+		if (gen_builtin_const(ep))
 			break;
 		printf("%s", ep->value);
 		break;
@@ -686,15 +581,15 @@ static void gen_expr(
 	}
 }
 
-static int gen_builtin_const(int context, Expr *ep)
+static int gen_builtin_const(Expr *ep)
 {
 	char	*const_name = ep->value;
-	struct const_symbol *sym = lookup_const(const_name);
+	struct const_symbol *sym = lookup_builtin_const(global_sym_table, const_name);
 
 	if (sym == NULL)
-		return FALSE;
-	printf("%d", sym->value);
-	return TRUE;
+		return CT_NONE;
+	printf("%s", const_name);
+	return sym->type;
 }
 
 /* Generate builtin function call */
@@ -702,7 +597,7 @@ static int gen_builtin_func(int context, Expr *ep)
 {
 	char	*func_name = ep->value;	/* function name */
 	Expr	*ap;			/* argument expr */
-	struct func_symbol *sym = lookup_func(func_name);
+	struct func_symbol *sym = lookup_builtin_func(global_sym_table, func_name);
 
 	if (sym == NULL)
 		return FALSE;	/* not a special function */
@@ -900,7 +795,16 @@ static void gen_pv_func(
 		printf(", ");
 		if (ef_args)
 		{
-			gen_ef_arg(func_name, ap, num_extra_parms+1);
+			/* special case: constant NOEVFLAG */
+			if (ap->type == E_CONST)
+			{
+				if (gen_builtin_const(ap)!=CT_EVFLAG)
+					error_at_expr(ap,
+					  "argument %d to built-in function %s must be an event flag\n",
+					  num_extra_parms+1, func_name);
+			}
+			else
+				gen_ef_arg(func_name, ap, num_extra_parms+1);
 		}
 		else
 		{

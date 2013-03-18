@@ -2,7 +2,7 @@
 Copyright (c) 1990      The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -21,7 +21,7 @@ in the file LICENSE that is included with this distribution.
 #include	"gen_code.h"
 #include	"main.h"
 
-#include <seqVersion.h>
+#include <seq_release.h>
 
 static Options options = DEFAULT_OPTIONS;
 
@@ -35,8 +35,7 @@ static void parse_option(char *s);
 static void print_usage(void);
 
 /* The streams stdin and stdout are redirected to files named in the
-   command parameters.  This accomodates the use by lex of stdin for input
-   and permits printf() to be used for output. */
+   command parameters. */
 int main(int argc, char *argv[])
 {
 	FILE	*infp, *outfp;
@@ -51,7 +50,7 @@ int main(int argc, char *argv[])
 	if (infp == NULL)
 	{
 		perror(in_file);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	/* Redirect output stream to specified file */
@@ -59,16 +58,19 @@ int main(int argc, char *argv[])
 	if (outfp == NULL)
 	{
 		perror(out_file);
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
-	/* Use line buffered output */
-	setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
-	setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+	/* stdin, i.e. the input file should be unbuffered,
+           since the re2c generated lexer works fastest when
+           it maintains its own buffer */
+	setvbuf(stdin, NULL, _IONBF, 0);
+	/* stdout, i.e. the generated C program should be
+           block buffered with standard buffer size */
+	setvbuf(stdout, NULL, _IOFBF, BUFSIZ);
+	/* stderr, i.e. messages should be output immediately */
+	setvbuf(stderr, NULL, _IONBF, 0);
 
-#if 0
-	printf("/* %s: %s */\n", SEQ_VERSION, in_file);
-#endif
 	printf("/* Generated with snc from %s */\n", in_file);
 
 	exp = parse_program(in_file);
@@ -78,7 +80,7 @@ int main(int argc, char *argv[])
 	if (err_cnt == 0)
 		generate_code(prg);
 
-	exit(err_cnt?1:0);
+	exit(err_cnt ? EXIT_FAILURE : EXIT_SUCCESS);
 }
 
 /* Initialize options, in_file, and out_file from arguments. */
@@ -89,7 +91,7 @@ static void parse_args(int argc, char *argv[])
 	if (argc < 2)
 	{
 		print_usage();
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	for (i=1; i<argc; i++)
@@ -102,7 +104,7 @@ static void parse_args(int argc, char *argv[])
 			{
 				report("missing filename after option -o\n");
 				print_usage();
-				exit(1);
+				exit(EXIT_FAILURE);
 			}
 			else
 			{
@@ -129,7 +131,7 @@ static void parse_args(int argc, char *argv[])
 	{
 		report("no input file argument given\n");
 		print_usage();
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
 	if (!out_file)	/* no -o option given */
@@ -197,7 +199,7 @@ static void parse_option(char *s)
 
 static void print_usage(void)
 {
-	report("%s\n", SEQ_VERSION);
+	report("%s\n", SEQ_RELEASE);
 	report("usage: snc <options> <infile>\n");
 	report("options:\n");
 	report("  -o <outfile> - override name of output file\n");
@@ -214,7 +216,7 @@ static void print_usage(void)
 	report("example:\n snc +a -c vacuum.st\n");
 }
 
-void gen_line_marker_prim(int line_num, char *src_file)
+void gen_line_marker_prim(int line_num, const char *src_file)
 {
 	if (options.line)
 		printf("# line %d \"%s\"\n", line_num, src_file);

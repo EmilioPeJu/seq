@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -15,7 +15,7 @@ int v = 0;
 #define MAX_TEST 10
 
 entry {
-    testPlan(MAX_TEST*2);
+    seq_test_init(MAX_TEST*2);
 }
 
 ss ss1 {
@@ -48,6 +48,5 @@ ss ss2 {
 }
 
 exit {
-    testDone();
     seq_test_done();
 }

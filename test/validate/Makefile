@@ -10,6 +10,9 @@ SNC = $(INSTALL_HOST_BIN)/snc$(HOSTEXE)
 SNCFLAGS_DEFAULT += +m -i
 SNCFLAGS_vxWorks += -nil-
 
+#  Set to path of valgrind executable if tests should run under valgrind
+USE_VALGRIND =
+
 #  Sequence programs and/or object files to create
 TESTPROD_HOST += decl
 TESTPROD_HOST += delay
@@ -24,7 +27,9 @@ TESTPROD_HOST += syncq
 
 REGRESSION_TESTS_WITH_DB += bittypes
 REGRESSION_TESTS_WITH_DB += evflag
+REGRESSION_TESTS_WITH_DB += monitorEvflag
 REGRESSION_TESTS_WITH_DB += pvGet
+REGRESSION_TESTS_WITH_DB += pvGetAsync
 REGRESSION_TESTS_WITH_DB += pvPutAsync
 REGRESSION_TESTS_WITH_DB += reassign
 
@@ -57,25 +62,21 @@ endif
 #TESTPROD_HOST += ctest
 
 #  Libraries
-PROD_LIBS += seqSoftIoc
 PROD_LIBS += seq pv
 PROD_LIBS += $(EPICS_BASE_IOC_LIBS)
-
-LIBRARY += seqSoftIoc
 
 DBD += seqSoftIoc.dbd
 seqSoftIoc_DBD += base.dbd
 
 seqSoftIoc_SRCS += seqSoftIoc_registerRecordDeviceDriver.cpp
 
-seqSoftIoc_LIBS += seq pv
-seqSoftIoc_LIBS += $(EPICS_BASE_IOC_LIBS)
-
 ifeq '$(EPICS_HAS_UNIT_TEST)' '1'
 seqSoftIoc_SRCS += testSupport.c
 
+REGRESSION_TESTS_vxWorks = $(filter-out pvGetAsync,$(REGRESSION_TESTS))
+
 PROD_vxWorks = vxTestHarness
-vxTestHarness_SRCS += $(REGRESSION_TESTS:%=%.st)
+vxTestHarness_SRCS += $(REGRESSION_TESTS_vxWorks:%=%.st)
 vxTestHarness_SRCS += testSupport.c
 vxTestHarness_SRCS += vxTestHarness_registerRecordDeviceDriver.cpp
 vxTestHarness_OBJS += $(EPICS_BASE_BIN)/vxComLibrary
@@ -84,10 +85,17 @@ DBD += vxTestHarness.dbd
 vxTestHarness_DBD += base.dbd
 vxTestHarness_DBD += $(COMMON_DIR)/vxTestHarnessRegistrars.dbd
 
+# needed for base 3.14.10 compatibility:
 USR_DBDFLAGS += -I $(COMMON_DIR)
 
 DB += vxTestHarness.db
 endif
+
+define template_SRCS
+$(1)_SRCS += $(1).st $(seqSoftIoc_SRCS)
+endef
+$(foreach st, $(TESTPROD_HOST), $(eval $(call template_SRCS,$(st))))
+
 
 # PROD_RTEMS = rtemsTestHarness
 # rtemsTestHarness_SRCS += $(TESTPROD_HOST::%=%.st)
@@ -98,38 +106,36 @@ include $(TOP)/configure/RULES
 #----------------------------------------
 #  ADD RULES AFTER THIS LINE
 
+ifeq '$(EPICS_HAS_UNIT_TEST)' '1'
+vxTestHarness.db$(DEP):
+	@echo "$(COMMON_DIR)/vxTestHarness.db: ../Makefile" > $@
+vxTestHarness.dbd$(DEP):
+	@echo "$(COMMON_DIR)/vxTestHarness.dbd: ../Makefile" > $@
+endif
+
 SOFTIOC=$(EPICS_BASE_BIN)/softIoc$(HOSTEXE)
 SOFTDBD=$(EPICS_BASE)/dbd/softIoc.dbd
 
 $(REGRESSION_TESTS_WITH_DB:%=%Ioc.t): %Ioc.t: %$(EXE) ../makeTestfile.pl
-	$(RM) $@.tmp
-	$(PERL) ../makeTestfile.pl $@.tmp $* $< ioc $(SOFTIOC) $(SOFTDBD) $(EPICS_HOST_ARCH)
-	$(MV) $@.tmp $@
+	$(PERL) ../makeTestfile.pl $@ $* $< ioc $(SOFTIOC) $(SOFTDBD) $(USE_VALGRIND)
 
 $(REGRESSION_TESTS:%=%.t): %.t: %$(EXE) ../makeTestfile.pl
-	$(RM) $@.tmp
-	$(PERL) ../makeTestfile.pl $@.tmp $* $< noioc $(SOFTIOC) $(SOFTDBD) $(EPICS_HOST_ARCH)
-	$(MV) $@.tmp $@
+	$(PERL) ../makeTestfile.pl $@ $* $< noioc $(SOFTIOC) $(SOFTDBD) $(USE_VALGRIND)
 
 norace.i race.i: ../raceCommon.st
 
 $(COMMON_DIR)/vxTestHarnessRegistrars.dbd: ../makeTestDbd.pl
-	$(RM) $@.tmp
-	$(PERL) ../makeTestDbd.pl $(REGRESSION_TESTS) > $@.tmp
-	$(MV) $@.tmp $@
+	$(PERL) ../makeTestDbd.pl $(REGRESSION_TESTS_vxWorks) > $@
 
 $(COMMON_DIR)/vxTestHarness.dbd: $(COMMON_DIR)/vxTestHarnessRegistrars.dbd
 
 $(COMMON_DIR)/vxTestHarness.db: $(REGRESSION_TESTS_WITH_DB:%=../%.db)
-	$(RM) $@.tmp
-	$(PERL) -ne print $(REGRESSION_TESTS_WITH_DB:%=../%.db) > $@.tmp
-	$(MV) $@.tmp $@
+	$(PERL) -ne print $(REGRESSION_TESTS_WITH_DB:%=../%.db) > $@
 
 st.cmd: ../st.cmd.vxWorks ../makeStCmd.pl
-	$(RM) $@.tmp
-	$(CP) ../st.cmd.vxWorks $@.tmp
-	$(PERL) ../makeStCmd.pl $(REGRESSION_TESTS) >> $@.tmp
-	$(MV) $@.tmp $@
+	$(CP) ../st.cmd.vxWorks $@
+	$(PERL) -MExtUtils::Command -e chmod 644 $@
+	$(PERL) ../makeStCmd.pl $(REGRESSION_TESTS_vxWorks) >> $@
 
 ifeq "$(OS_CLASS)" "vxWorks"
 build: st.cmd

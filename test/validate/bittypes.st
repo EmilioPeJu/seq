@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -23,7 +23,7 @@ assign i32 to "ushort";
 assign ui32 to "ushort";
 
 entry {
-    testPlan(12);
+    seq_test_init(12);
 }
 
 ss test {
@@ -74,6 +74,5 @@ ss test {
 }
 
 exit {
-    testDone();
     seq_test_done();
 }

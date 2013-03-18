@@ -2,7 +2,7 @@
 Copyright (c) 1990      The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -19,6 +19,7 @@ in the file LICENSE that is included with this distribution.
 #include "sym_table.h"
 #include "main.h"
 #include "expr.h"
+#include "builtin.h"
 #include "analysis.h"
 
 static const int impossible = 0;
@@ -39,6 +40,7 @@ static SyncQ *new_sync_queue(SyncQList *syncq_list, uint size);
 static void connect_variables(SymTable st, Expr *scope);
 static void connect_state_change_stmts(SymTable st, Expr *scope);
 static uint connect_states(SymTable st, Expr *ss_list);
+static void check_states_reachable_from_first(Expr *ss);
 static void add_var(SymTable st, Var *vp, Expr *scope);
 static Var *find_var(SymTable st, char *name, Expr *scope);
 static uint assign_ef_bits(Expr *scope);
@@ -46,6 +48,7 @@ static uint assign_ef_bits(Expr *scope);
 Program *analyse_program(Expr *prog, Options options)
 {
 	Program *p = new(Program);
+	Expr *ss;
 
 	assert(prog);	/* precondition */
 #ifdef DEBUG
@@ -63,6 +66,9 @@ Program *analyse_program(Expr *prog, Options options)
 
 	p->sym_table = sym_table_create();
 
+	register_builtin_consts(p->sym_table);
+	register_builtin_funcs(p->sym_table);
+
 	p->chan_list = new(ChanList);
 	p->syncq_list = new(SyncQList);
 
@@ -74,6 +80,8 @@ Program *analyse_program(Expr *prog, Options options)
 	p->num_ss = connect_states(p->sym_table, prog);
 	connect_variables(p->sym_table, prog);
 	connect_state_change_stmts(p->sym_table, prog);
+	foreach(ss, prog->prog_statesets)
+		check_states_reachable_from_first(ss);
 	p->num_event_flags = assign_ef_bits(p->prog);
 	return p;
 }
@@ -411,7 +419,7 @@ static void assign_elem(
 	assert(chan_list);				/* precondition */
 	assert(defn);					/* precondition */
 	assert(vp);					/* precondition */
-	assert(n_subscr <= type_array_length1(vp->type));/*precondition */
+	assert(n_subscr < type_array_length1(vp->type));/*precondition */
 	assert(vp->assign != M_SINGLE);			/* precondition */
 
 	if (vp->assign == M_NONE)
@@ -514,6 +522,12 @@ static void assign_multi(
 #ifdef DEBUG
 		report("'%s'%s", pv_name->value, pv_name->next ? ", " : "};\n");
 #endif
+		if (n_subscr >= type_array_length1(vp->type))
+		{
+			warning_at_expr(pv_name, "discarding excess PV names "
+				"in multiple assign to variable '%s'\n", vp->name);
+			break;
+		}
 		assign_elem(chan_list, defn, vp, n_subscr++, pv_name->value);
 	}
 	/* for the remaining array elements, assign to "" */
@@ -808,10 +822,6 @@ static void syncq_var(Expr *defn, Var *vp, SyncQ *qp)
 	assert(qp);				/* call */
 	assert(vp->syncq != M_SINGLE);		/* call */
 
-#ifdef DEBUG
-	report("syncq %s to %s;\n", vp->name, qp->ef_var->name);
-#endif
-
 	if (vp->syncq == M_MULTI)
 	{
 		error_at_expr(defn, "some array elements of '%s' already syncq'd\n",
@@ -855,10 +865,6 @@ static void syncq_elem(Expr *defn, Var *vp, Expr *subscr, SyncQ *qp)
 	assert(qp);					/* call */
 
 	assert(vp->syncq != M_SINGLE);			/* call */
-
-#ifdef DEBUG
-	report("syncq %s[%d] to %s;\n", vp->name, subscr->value, qp->ef_var->name);
-#endif
 
 	if (vp->type->tag != V_ARRAY)	/* establish L3 */
 	{
@@ -1099,6 +1105,12 @@ static int connect_variable(Expr *ep, Expr *scope, void *parg)
 	if (!vp)
 	{
 		VarList *var_list = *pvar_list_from_scope(scope);
+		struct const_symbol *csym = lookup_builtin_const(st, ep->value);
+		if (csym)
+		{
+			ep->type = E_CONST;
+			return FALSE;
+		}
 
 		warning_at_expr(ep, "variable '%s' used but not declared\n",
 			ep->value);
@@ -1193,7 +1205,7 @@ static int assign_next_delay_id(Expr *ep, Expr *scope, void *parg)
 	assert(ep->type == E_DELAY);
 	ep->extra.e_delay = *delay_id;
 	*delay_id += 1;
-	return FALSE;	/* delays cannot be nested as they do not return a value */
+	return TRUE;
 }
 
 /* Check for duplicate state set and state names and resolve transitions between states */
@@ -1342,6 +1354,70 @@ static void connect_state_change_stmts(SymTable st, Expr *scope)
 	traverse_expr_tree(scope,
 		(1<<S_CHANGE)|(1<<D_SS)|(1<<D_ENTRY)|(1<<D_EXIT)|(1<<D_WHEN),
 		expr_mask, 0, iter_connect_state_change_stmts, &csc_arg);
+}
+
+static void mark_states_reachable_from(Expr *sp);
+
+static int iter_mark_states_reachable(Expr *ep, Expr *scope, void *parg)
+{
+	Expr *target_state = 0;
+
+	assert(ep->type == S_CHANGE || ep->type == D_WHEN);
+	switch (ep->type ) {
+	case S_CHANGE:
+		target_state = ep->extra.e_change;
+		break;
+	case D_WHEN:
+		target_state = ep->extra.e_when->next_state;
+		break;
+	}
+	if (target_state && !target_state->extra.e_state->is_target)
+	{
+		target_state->extra.e_state->is_target = 1;
+		mark_states_reachable_from(target_state);
+	}
+	return (ep->type == D_WHEN);
+}
+
+static void mark_states_reachable_from(Expr *sp)
+{
+	assert(sp);
+	assert(sp->type == D_STATE);
+
+	traverse_expr_tree(
+		sp,				/* start expression */
+		(1<<S_CHANGE)|(1<<D_WHEN),	/* when to call iteratee */
+		expr_mask,			/* when to stop descending */
+		sp,				/* current scope, 0 at top-level */
+		iter_mark_states_reachable,	/* function to call */
+		0				/* argument to pass to function */
+	);
+}
+
+static void check_states_reachable_from_first(Expr *ssp)
+{
+	Expr *sp;
+
+	assert(ssp);
+	assert(ssp->type == D_SS);
+
+	sp = ssp->ss_states;
+	assert(sp);
+	assert(sp->type == D_STATE);
+	assert(sp->extra.e_state->index == 0);
+
+	sp->extra.e_state->is_target = 1;
+	mark_states_reachable_from(sp);
+
+	foreach (sp, ssp->ss_states)
+	{
+		if (!sp->extra.e_state->is_target)
+		{
+			warning_at_expr(sp, "state '%s' in state set '%s' cannot "
+				"be reached from start state\n",
+				sp->value, ssp->value);
+		}
+	}
 }
 
 /* Assign event bits to event flags and associate pv channels with

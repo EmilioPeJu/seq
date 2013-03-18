@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -11,7 +11,7 @@ in the file LICENSE that is included with this distribution.
 #define INCLsncmainh
 
 /* append '# <line_num> "<src_file>"\n' to output (if not disabled by cmd-line option) */
-void gen_line_marker_prim(int line_num, char *src_file);
+void gen_line_marker_prim(int line_num, const char *src_file);
 
 /* this gets the shorter name as it is the common way to call above */
 #define gen_line_marker(ep) gen_line_marker_prim((ep)->line_num, (ep)->src_file)

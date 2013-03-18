@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -7,13 +7,10 @@ in the file LICENSE that is included with this distribution.
 /*************************************************************************\
                     Lexer specification/implementation
 \*************************************************************************/
+#include <assert.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <osiUnistd.h>
-#ifdef _WIN32
-#include <io.h>
-#endif
 #include <stdarg.h>
 
 #include "snl.h"
@@ -30,7 +27,7 @@ typedef unsigned char uchar;
 #define	YYCURSOR		cursor
 #define	YYLIMIT			s->lim
 #define	YYMARKER		s->ptr
-#define	YYFILL			cursor = fill(s, cursor);
+#define	YYFILL(dummy)		cursor = fill(s, cursor);
 #define	YYDEBUG(state, current) report("state = %d, current = %c\n", state, current);
 
 #define	RET(i,r) {\
@@ -46,18 +43,18 @@ typedef unsigned char uchar;
 #define IDENTIFIER(t,e,n)	RET(t,n)
 #define DELIMITER		RET
 
-#define DONE			RET(EOI,0)
+#define DONE			RET(EOI,"")
 
 typedef struct Scanner {
-	int	fd;	/* file descriptor */
 	uchar	*bot;	/* pointer to bottom (start) of buffer */
 	uchar	*tok;	/* pointer to start of current token */
+	uchar	*end;	/* pointer to (temporary) end of current token */
 	uchar	*ptr;	/* marker for backtracking (always > tok) */
 	uchar	*cur;	/* saved scan position between calls to scan() */
 	uchar	*lim;	/* pointer to one position after last read char */
 	uchar	*top;	/* pointer to (one after) top of allocated buffer */
 	uchar	*eof;	/* pointer to (one after) last char in file (or 0) */
-	char	*file;	/* source file name */
+	const char *file;	/* source file name */
 	int	line;	/* line number */
 } Scanner;
 
@@ -67,6 +64,7 @@ static void scan_report(Scanner *s, const char *format, ...)
 
 	report_loc(s->file, s->line);
 	va_start(args, format);
+	fprintf(stderr, "lexical error: ");
 	vfprintf(stderr, format, args);
 	va_end(args);
 }
@@ -99,13 +97,14 @@ static uchar *fill(Scanner *s, uchar *cursor) {
 #endif
 			if (!need_alloc) {
 				/* shift valid buffer content down to bottom of buffer */
-				memcpy(s->bot, token, valid);
+				memmove(s->bot, token, valid);
 			}
 			/* adjust pointers */
 			s->tok = s->bot;	/* same as s->tok -= garbage */
 			s->ptr -= garbage;
 			cursor -= garbage;
 			s->lim -= garbage;
+			s->end -= garbage;
 			/* invariant: s->bot, s->top, s->eof, s->lim - s->tok */
 		}
 		/* increase the buffer size if necessary, ensuring that we have
@@ -117,6 +116,7 @@ static uchar *fill(Scanner *s, uchar *cursor) {
 #endif
 			memcpy(buf, token, valid);
 			s->tok = buf;
+			s->end = &buf[s->end - s->bot];
 			s->ptr = &buf[s->ptr - s->bot];
 			cursor = &buf[cursor - s->bot];
 			s->lim = &buf[s->lim - s->bot];
@@ -126,10 +126,16 @@ static uchar *fill(Scanner *s, uchar *cursor) {
 		}
 		/* fill the buffer, starting at s->lim, by reading a chunk of
 		   BSIZE bytes (or less if eof is encountered) */
-		if ((read_cnt = read(s->fd, (char*) s->lim, BSIZE)) != BSIZE) {
-			s->eof = &s->lim[read_cnt];
-			/* insert sentinel and increase s->eof */
-			*(s->eof)++ = '\n';
+		if ((read_cnt = fread(s->lim, sizeof(uchar), BSIZE, stdin)) != BSIZE) {
+			if (ferror(stdin)) {
+				perror("error reading input");
+				exit(EXIT_FAILURE);
+			}
+			if (feof(stdin)) {
+				s->eof = &s->lim[read_cnt];
+				/* insert sentinel and increase s->eof */
+				*(s->eof)++ = '\n';
+			}
 		}
 		s->lim += read_cnt;	/* adjust limit */
 	}
@@ -139,17 +145,23 @@ static uchar *fill(Scanner *s, uchar *cursor) {
 /* alias strdup_from_to: duplicate string from start to (exclusive) stop */
 static char *strdupft(uchar *start, uchar *stop) {
 	char *result;
-	char c = *stop;
-	*stop = 0;
-	result = strdup((char*)start);
-	*stop = c;
+	size_t n;
+	assert (stop - start >= 0);
+	n = (size_t)(stop - start);
+	result = malloc(n+1);
+	memcpy(result, start, n);
+	result[n] = 0;
 	return result;
 }
 
-/*!re2c
-	re2c:yyfill:parameter	= 0;
+/*
+ * Note: Linemarkers differ between compilers. The MS C preprocessor outputs
+ * "#line <linenum> <filename>" directives, while gcc leaves off the "line".
+ */
 
-	ANY	= .|"\n";
+/*!re2c
+	NL	= [\n];
+	ANY	= [^];
 	SPC	= [ \t];
 	OCT	= [0-7];
 	DEC	= [0-9];
@@ -159,11 +171,11 @@ static char *strdupft(uchar *start, uchar *stop) {
 	FS	= [fFlL];
 	IS	= [uUlL]*;
 	ESC	= [\\] ([abfnrtv?'"\\] | "x" HEX+ | OCT+);
+	LINE	= SPC* "#" (SPC* "line")? SPC+;
 */
 
 static int scan(Scanner *s, Token *t) {
 	uchar *cursor = s->cur;
-	uchar *end = cursor;
 	int in_c_code = 0;
 	/*
 	Note: Must use a temporary offset for (parts of) line_marker.
@@ -171,7 +183,9 @@ static int scan(Scanner *s, Token *t) {
 	can appear nested inside c_code block tokens, so using s->tok for
 	line_markers would destroy them.
 	*/
-        int line_marker_part = 0;
+	int line_marker_part = 0;
+
+	s->end = 0;
 
 snl:
 	if (in_c_code)
@@ -181,20 +195,20 @@ snl:
 	s->tok = cursor;
 
 /*!re2c
-	"\n"		{
+	NL		{
 				if(cursor == s->eof) DONE;
 				s->line++;
 				goto snl;
 			}
-	["]		{
-				s->tok = end = cursor;
-				goto string_const;
-			}
-	"/*"		{ goto comment; }
-	"#" SPC*	{
+	LINE		{
 				line_marker_part = cursor - s->tok;
 				goto line_marker;
 			}
+	["]		{
+				s->tok = s->end = cursor;
+				goto string_const;
+			}
+	"/*"		{ goto comment; }
 	"%{"		{
 				s->tok = cursor;
 				in_c_code = 1;
@@ -204,7 +218,7 @@ snl:
 				goto c_code;
 			}
 	"%%" SPC*	{
-				s->tok = end = cursor;
+				s->tok = s->end = cursor;
 				goto c_code_line;
 			}
 	"assign"	{ KEYWORD(ASSIGN,	"assign"); }
@@ -245,13 +259,8 @@ snl:
 	"int32_t"	{ TYPEWORD(INT32T, 	"int32_t"); }
 	"uint32_t"	{ TYPEWORD(UINT32T,	"uint32_t"); }
 
-	"TRUE"		{ LITERAL(INTCON, integer_literal, "TRUE"); }
-	"FALSE"		{ LITERAL(INTCON, integer_literal, "FALSE"); }
-	"ASYNC"		{ LITERAL(INTCON, integer_literal, "ASYNC"); }
-	"SYNC"		{ LITERAL(INTCON, integer_literal, "SYNC"); }
-
 	LET (LET|DEC)*	{ IDENTIFIER(NAME, identifier, strdupft(s->tok, cursor)); }
-	("0" [xX] HEX+ IS?) | ("0" DEC+ IS?) | (DEC+ IS?) | (['] (ESC|ANY\[\n\\'])* ['])
+	("0" [xX] HEX+ IS?) | ("0" OCT+ IS?) | (DEC+ IS?) | (['] (ESC|[^\n\\'])* ['])
 			{ LITERAL(INTCON, integer_literal, strdupft(s->tok, cursor)); }
 
 	(DEC+ EXP FS?) | (DEC* "." DEC+ EXP? FS?) | (DEC+ "." DEC* EXP? FS?)
@@ -311,7 +320,7 @@ string_const:
 	(ESC | [^"\n\\])*
 			{ goto string_const; }
 	["]		{
-				end = cursor - 1;
+				s->end = cursor - 1;
 				goto string_cat;
 			}
 	ANY		{ scan_report(s, "invalid character in string constant\n"); DONE; }
@@ -320,23 +329,23 @@ string_const:
 string_cat:
 /*!re2c
 	SPC+		{ goto string_cat; }
-	"\n"		{
+	NL		{
 				if (cursor == s->eof) {
 					cursor -= 1;
-					LITERAL(STRCON, string_literal, strdupft(s->tok, end));
+					LITERAL(STRCON, string_literal, strdupft(s->tok, s->end));
 				}
 				s->line++;
 				goto string_cat;
 			}
 	["]		{
-				uint len = end - s->tok;
+				uint len = s->end - s->tok;
 				memmove(cursor - len, s->tok, len);
 				s->tok = cursor - len;
 				goto string_const;
 			}
 	ANY		{
 				cursor -= 1;
-				LITERAL(STRCON, string_literal, strdupft(s->tok, end));
+				LITERAL(STRCON, string_literal, strdupft(s->tok, s->end));
 			}
 */
 
@@ -352,21 +361,12 @@ line_marker:
 
 line_marker_str:
 /*!re2c
-	(["] (ESC|ANY\[\n\\"])* ["])
+	(["] (ESC|[^\n\\"])* ["])
 			{
-				uchar saved = cursor[-1];
-				char *str = (char *)(s->tok + line_marker_part + 1);
-				cursor[-1] = 0;
-				if (!s->file) {
-					s->file = strdup(str);
-				} else if (s->file && strcmp(str, s->file) != 0) {
-					free(s->file);
-					s->file = strdup(str);
-				}
-				cursor[-1] = saved;
+				s->file = strdupft(s->tok + line_marker_part + 1, cursor-1);
 				goto line_marker_skip;
 			}
-	"\n"		{
+	NL		{
 				cursor -= 1;
 				goto line_marker_skip;
 			}
@@ -376,14 +376,14 @@ line_marker_str:
 line_marker_skip:
 /*!re2c
 	.*		{ goto snl; }
-	"\n"		{ cursor -= 1; goto snl; }
+	NL		{ cursor -= 1; goto snl; }
 */
 
 comment:
 /*!re2c
 	"*/"		{ goto snl; }
 	.		{ goto comment; }
-	"\n"		{
+	NL		{
 				if (cursor == s->eof) {
 					scan_report(s, "at eof: unterminated comment\n");
 					DONE;
@@ -403,11 +403,11 @@ c_code:
 				LITERAL(CCODE, embedded_c_code, strdupft(s->tok, cursor - 2));
 			}
 	.		{ goto c_code; }
-	"#" SPC+	{
+	LINE		{
 				line_marker_part = cursor - s->tok;
 				goto line_marker;
 			}
-	"\n"		{
+	NL		{
 				if (cursor == s->eof) {
 					scan_report(s, "at eof: unterminated literal c-code section\n");
 					DONE;
@@ -420,20 +420,21 @@ c_code:
 c_code_line:
 /*!re2c
 	.		{
-				end = cursor;
+				s->end = cursor;
 				goto c_code_line;
 			}
-	SPC* "\n"	{
+	SPC* NL	{
 				if (cursor == s->eof) {
 					cursor -= 1;
 				}
 				s->line++;
-				if (end > s->tok) {
-					LITERAL(CCODE, embedded_c_code, strdupft(s->tok, end));
+				if (s->end > s->tok) {
+					LITERAL(CCODE, embedded_c_code, strdupft(s->tok, s->end));
 				}
 				goto snl;
 			}
 */
+	DONE;		/* dead code, only here to make compiler warning go away */
 }
 
 #ifdef TEST_LEXER
@@ -467,7 +468,7 @@ Expr *parse_program(const char *src_file)
 	void	*parser;	/* the (lemon generated) parser */
 
 	memset(&s, 0, sizeof(s));
-	s.file = strdup(src_file);
+	s.file = src_file;
 	s.line = 1;
 
 	parser = snlParserAlloc(malloc);

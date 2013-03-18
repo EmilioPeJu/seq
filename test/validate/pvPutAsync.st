@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -14,7 +14,7 @@ int x;
 assign x to "pvPutAsync1";
 
 entry {
-    testPlan(10);
+    seq_test_init(10);
 }
 
 ss test1 {
@@ -24,7 +24,7 @@ ss test1 {
             i = 0;
         }
         when (i == 5) {
-        } state put_sync
+        } state wait_complete
         when (delay(0.4)) {
             int status;
             x = 1;
@@ -35,19 +35,24 @@ ss test1 {
             ++i;
         } state put_async
     }
-    state put_sync {
+    state wait_complete {
+        when (delay(5.0)) {
+            testFail("pvPut completion timeout");
+        } state put_sync
         when (pvPutComplete(x)) {
+            testPass("pvPut/ASYNC complete");
+        } state put_sync
+    }
+    state put_sync {
+        entry {
             int i = 0;
-            testPass("pvPut/ASYNC complete\n");
             for (i=0; i<4; i++) {
                 int status = pvPut(x,SYNC);
                 /* should always succeed */
                 testOk(status==pvStatOK, "pvPut/SYNC %d, status=%d (%s)",
                     i, status, status ? pvMessage(x) : "");
             }
-        } state wait
-    }
-    state wait {
+        }
         when (delay(1)) {
         } exit
     }
@@ -84,6 +89,5 @@ ss test2 {
 #endif
 
 exit {
-    testDone();
     seq_test_done();
 }

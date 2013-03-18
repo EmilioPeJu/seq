@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -19,7 +19,7 @@ sync cnt to ef_cnt;
 #define MAX_TEST 10
 
 entry {
-    testPlan(MAX_TEST);
+    seq_test_init(MAX_TEST);
 }
 
 ss read {
@@ -50,6 +50,5 @@ ss write {
 }
 
 exit {
-    testDone();
     seq_test_done();
 }

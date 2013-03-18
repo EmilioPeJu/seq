@@ -4,7 +4,7 @@
 #                         Operator of Los Alamos National Laboratory.
 # Copyright (c) 2008      UChicago Argonne LLC, as Operator of Argonne
 #                         National Laboratory.
-# Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+# Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
 #                         und Energie GmbH, Germany (HZB)
 # This file is distributed subject to a Software License Agreement found
 # in file LICENSE that is included with this distribution.
@@ -22,10 +22,13 @@
 use strict;
 
 my $valgrind = "";
-`valgrind -h`;
-$valgrind = "valgrind -q --log-file=test " if $? == 0;
 
-my ($target, $stem, $exe, $ioc, $softioc, $softdbd) = @ARGV;
+my ($target, $stem, $exe, $ioc, $softioc, $softdbd, $valgrind_path) = @ARGV;
+
+if ($valgrind_path) {
+  `$valgrind_path -h`;
+  $valgrind = "$valgrind_path -q --log-file=test " if $? == 0;
+}
 
 my $db = "../$stem.db";
 

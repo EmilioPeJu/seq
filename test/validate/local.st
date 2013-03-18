@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -16,7 +16,7 @@ option +r;
 int i = 1;
 
 entry {
-    testPlan(5);
+    seq_test_init(5);
 }
 
 /* only state-set */
@@ -41,6 +41,5 @@ ss start {
 /* exit handler */
 exit {
     testOk(i==1, "global i==%d", i);
-    testDone();
     seq_test_done();
 }

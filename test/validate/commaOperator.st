@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -9,7 +9,7 @@ program commaOperatorTest
 %%#include "../testSupport.h"
 
 entry {
-    testPlan(4);
+    seq_test_init(4);
 }
 
 ss myss {
@@ -25,6 +25,5 @@ ss myss {
 }
 
 exit {
-    testDone();
     seq_test_done();
 }

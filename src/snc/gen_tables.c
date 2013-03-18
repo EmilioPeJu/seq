@@ -2,7 +2,7 @@
 Copyright (c) 1990      The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -22,6 +22,8 @@ in the file LICENSE that is included with this distribution.
 #endif
 
 #include "seqCom.h"
+#define boolean seqBool
+#define bitMask seqMask
 #include "analysis.h"
 #include "main.h"
 #include "sym_table.h"
@@ -37,7 +39,7 @@ typedef struct event_mask_args {
 static void gen_channel_table(ChanList *chan_list, uint num_event_flags, int opt_reent);
 static void gen_channel(Chan *cp, uint num_event_flags, int opt_reent);
 static void gen_state_table(Expr *ss_list, uint num_event_flags, uint num_channels);
-static void fill_state_struct(Expr *sp, char *ss_name);
+static void fill_state_struct(Expr *sp, char *ss_name, uint ss_num);
 static void gen_prog_table(Program *p);
 static void encode_options(Options options);
 static void encode_state_options(StateOptions options);
@@ -181,11 +183,12 @@ static void gen_state_table(Expr *ss_list, uint num_event_flags, uint num_channe
 	Expr	*sp;
 	uint	n;
 	uint	num_event_words = NWORDS(num_event_flags + num_channels);
+	uint	ss_num = 0;
 
 #if (__STDC_VERSION__ >= 199901L) || defined(__GNUC__)
 	bitMask	event_mask[num_event_words];
 #else
-	bitMask	*event_mask = (bitMask *)alloca(num_event_words);
+	bitMask	*event_mask = (bitMask *)alloca(num_event_words*sizeof(bitMask));
 #endif
 
 	/* NOTE: Bit zero of event mask is not used. Bit 1 to num_event_flags
@@ -199,8 +202,8 @@ static void gen_state_table(Expr *ss_list, uint num_event_flags, uint num_channe
 		foreach (sp, ssp->ss_states)
 		{
 			gen_state_event_mask(sp, num_event_flags, event_mask, num_event_words);
-			printf("static const bitMask\tEM_%s_%s[] = {\n",
-				ssp->value, sp->value);
+			printf("static const seqMask\tEM_%s_%d_%s[] = {\n",
+				ssp->value, ss_num, sp->value);
 			for (n = 0; n < num_event_words; n++)
 				printf("\t0x%08x,\n", event_mask[n]);
 			printf("};\n");
@@ -211,31 +214,32 @@ static void gen_state_table(Expr *ss_list, uint num_event_flags, uint num_channe
 		printf("static seqState G_%s_states[] = {\n", ssp->value);
 		foreach (sp, ssp->ss_states)
 		{
-			fill_state_struct(sp, ssp->value);
+			fill_state_struct(sp, ssp->value, ss_num);
 		}
 		printf("};\n");
+		ss_num++;
 	}
 }
 
 /* Generate a state struct */
-static void fill_state_struct(Expr *sp, char *ss_name)
+static void fill_state_struct(Expr *sp, char *ss_name, uint ss_num)
 {
 	printf("\t{\n");
 	printf("\t/* state name */        \"%s\",\n", sp->value);
-	printf("\t/* action function */   A_%s_%s,\n", ss_name, sp->value);
-	printf("\t/* event function */    E_%s_%s,\n", ss_name, sp->value);
-	printf("\t/* delay function */    D_%s_%s,\n", ss_name, sp->value);
+	printf("\t/* action function */   A_%s_%d_%s,\n", ss_name, ss_num, sp->value);
+	printf("\t/* event function */    E_%s_%d_%s,\n", ss_name, ss_num, sp->value);
+	printf("\t/* delay function */    D_%s_%d_%s,\n", ss_name, ss_num, sp->value);
 	printf("\t/* entry function */    ");
 	if (sp->state_entry)
-		printf("I_%s_%s,\n", ss_name, sp->value);
+		printf("I_%s_%d_%s,\n", ss_name, ss_num, sp->value);
 	else
 		printf("0,\n");
 	printf("\t/* exit function */     ");
 	if (sp->state_exit)
-		printf("O_%s_%s,\n", ss_name, sp->value);
+		printf("O_%s_%d_%s,\n", ss_name, ss_num, sp->value);
 	else
 		printf("0,\n");
-	printf("\t/* event mask array */  EM_%s_%s,\n", ss_name, sp->value);
+	printf("\t/* event mask array */  EM_%s_%d_%s,\n", ss_name, ss_num, sp->value);
 	printf("\t/* state options */     ");
 	encode_state_options(sp->extra.e_state->options);
 	printf("\n\t},\n");

@@ -2,7 +2,7 @@
 Copyright (c) 1990-1994 The Regents of the University of California
                         and the University of Chicago.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -151,7 +151,8 @@ epicsShareFunc void epicsShareAPI seqChanShow(epicsThreadId tid, const char *str
 	else
 		connQual = 0;
 
-	while (dn && (unsigned)nch < sp->numChans)
+	/* terminate whenever nch leaves the range */
+	while (dn && nch >= 0 && (unsigned)nch < sp->numChans)
 	{
 		CHAN *ch = sp->chan + nch;
 		DBCHAN *dbch = ch->dbch;
@@ -176,7 +177,7 @@ epicsShareFunc void epicsShareAPI seqChanShow(epicsThreadId tid, const char *str
 				continue; /* skip this channel */
 			}
 		}
-		printf("\n#%d of %d:\n", nch+1, sp->numChans);
+		printf("\n#%d of %d:\n", nch, sp->numChans);
 		printf("  Variable name: \"%s\"\n", ch->varName);
 		printf("    type = %s\n", ch->type->typeStr);
 		printf("    count = %u\n", ch->count);
@@ -198,8 +199,8 @@ epicsShareFunc void epicsShareAPI seqChanShow(epicsThreadId tid, const char *str
 		else
 			printf("  Not monitored\n");
 
-		if (ch->efId)
-			printf("  Sync'ed to event flag %u\n", ch->efId);
+		if (ch->syncedTo)
+			printf("  Sync'ed to event flag %u\n", ch->syncedTo);
 		else
 			printf("  Not sync'ed\n");
 
@@ -221,8 +222,7 @@ epicsShareFunc void epicsShareAPI seqChanShow(epicsThreadId tid, const char *str
 		}
 
 		dn = userInput();
-		nch = max(0, nch + dn);
-		assert(nch >= 0);
+		nch += dn;
 	}
 }
 /*
@@ -284,16 +284,6 @@ epicsShareFunc void epicsShareAPI seqcar(int level)
 		stats.nChans - stats.nConn);
 }
 
-#if 0
-epicsShareFunc void epicsShareAPI seqcaStats(int *pchans, int *pdiscon)
-{
-	struct seqStats stats = {0, 0, 0, 0};
-	seqTraverseProg(seqcarCollect, (void *) &stats);
-	if (pchans)  *pchans  = stats.nChans;
-	if (pdiscon) *pdiscon = stats.nChans - stats.nConn;
-}
-#endif
-
 /*
  * seqQueueShow() - Show syncQ queue information for a state program.
  */
@@ -301,48 +291,51 @@ epicsShareFunc void epicsShareAPI seqQueueShow(epicsThreadId tid)
 {
 	SSCB	*ss = seqQryFind(tid);
 	SPROG	*sp;
-	int	n = 0;
+	int	nq = 0;
 	int	dn = 1;
 
 	if (ss == NULL) return;
 	sp = ss->sprog;
 	printf("State Program: \"%s\"\n", sp->progName);
 	printf("Number of queues = %d\n", sp->numQueues);
-	while (dn && (unsigned)n < sp->numQueues)
+	/* terminate whenever nq leaves the range */
+	while (dn && nq >= 0 && (unsigned)nq < sp->numQueues)
 	{
-		QUEUE	queue = sp->queues[n];
+		QUEUE	queue = sp->queues[nq];
 
-		printf("  Queue #%d: numElems=%u, used=%u, elemSize=%u\n", n,
+		printf("  Queue #%d: numElems=%u, used=%u, elemSize=%u\n", nq,
 			(unsigned)seqQueueNumElems(queue),
 			(unsigned)seqQueueUsed(queue),
 			(unsigned)seqQueueElemSize(queue));
 		dn = userInput();
-		n = max(0, n + dn);
-		assert(n >= 0);
+		nq += dn;
 	}
 }
 
-/* Read from console until a RETURN is detected.
-   The return value <n> value means:
-   n == 0: quit
-   n > 0 : move forward n items
-   n < 0 : move backward n items
+/* Read one line from console and parse.
+   The input can be:
+   - empty (return) as shortcut for '+1'
+   - '-' or '+' as shortcuts for '-1' and '+1'
+   - a signed integer
+   - anything else means quit
+   The return value means:
+   == 0: quit
+   > 0 : move forward n items
+   < 0 : move backward n items
 */
 static int userInput(void)
 {
-	char	buffer[10];
-	int	n;
+	char	buf[10];
 
 	printf("Next? (+/- skip count)\n");
-	if (fgets(buffer, 10, stdin) == NULL)
+	if (fgets(buf, 10, stdin) == NULL)
 		return 0;
-	if (buffer[0] == 'q')
-		return 0; /* quit */
+	if (buf[0] == '\n')
+		return 1;
+	else if ((buf[0] == '-' || buf[0] == '+') && buf[1] == '\n')
+		buf[1] = '1';
 
-	n = atoi(buffer);
-	if (n == 0)
-		n = 1;
-	return n;
+	return atoi(buf);
 }
 
 /* Print the current internal value of a database channel */
@@ -350,7 +343,7 @@ static void printValue(pr_fun *pr, void *val, unsigned count, int type)
 {
 	char	*c = (char *)val;
 	short	*s = (short *)val;
-	long	*l = (long *)val;
+	int	*i = (int *)val;
 	float	*f = (float *)val;
 	double	*d = (double *)val;
 	typedef char string[MAX_STRING_SIZE];
@@ -370,7 +363,7 @@ static void printValue(pr_fun *pr, void *val, unsigned count, int type)
 			pr(" %d", *s++);
 			break;
 		case pvTypeLONG:
-			pr(" %ld", *l++);
+			pr(" %d", *i++);
 			break;
 		case pvTypeFLOAT:
 			pr(" %g", *f++);
@@ -386,10 +379,9 @@ static void printValue(pr_fun *pr, void *val, unsigned count, int type)
 /* Find a state program associated with a given thread id */
 static SSCB *seqQryFind(epicsThreadId tid)
 {
-	SSCB *ss;
+	SSCB *ss = NULL;
 
-	ss = seqFindStateSet(tid);
-	if (ss == NULL)
+	if (tid == NULL || (ss = seqFindStateSet(tid)) == NULL)
 	{
 		if (tid)
 			printf("No program instance is running thread %p.\n", tid);
@@ -407,8 +399,8 @@ static int seqShowSP(SPROG *sp, void *parg)
 	int		*pprogCount = (int *)parg;
 
 	if ((*pprogCount)++ == 0)
-		printf("Program Name     Thread ID  Thread Name      SS Name\n");
-		printf("------------     ---------  -----------      -------\n");
+		printf("Program Name        Thread ID           Thread Name         SS Name\n");
+		printf("------------        ---------           -----------         -------\n");
 	progName = sp->progName;
 	for (nss = 0; nss < sp->numSS; nss++)
 	{
@@ -419,7 +411,7 @@ static int seqShowSP(SPROG *sp, void *parg)
 		else
 			epicsThreadGetName(ss->threadId, threadName,
 				      sizeof(threadName));
-		printf("%-16s %-8p  %-16s %-16s\n", progName,
+		printf("%-19s %-19p %-19s %-19s\n", progName,
 			ss->threadId, threadName, ss->ssName );
 		progName = "";
 	}

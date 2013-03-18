@@ -8,10 +8,14 @@ my $success = {
   sncExOpt_DuplOpt => 0,
   sync_not_monitored => 0,
   syncq_not_monitored => 0,
+  include_windows_h => 0,
+  namingConflict => 0,
+  nesting_depth => 0,
 };
 
 my $warning = {
   sncExOpt_UnrecOpt => 1,
+  state_not_reachable => 3,
   syncq_no_size => 1,
 };
 

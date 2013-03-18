@@ -1,7 +1,7 @@
 /*************************************************************************\
 Copyright (c) 1989-1993 The Regents of the University of California.
                         Los Alamos National Laboratory
-Copyright (c) 2010-2011 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -60,11 +60,11 @@ struct options
 	uint	reent:1;		/* reentrant at run-time */
 	uint	safe:1;			/* safe (no globals) */
 	uint	newef:1;		/* new event flag mode */
-	uint	main:1;			/* main program */
 
 					/* compile time options */
+	uint	main:1;			/* generate main procedure */
 	uint	init_reg:1;		/* register commands/programs */
-	uint	line:1;			/* line numbering */
+	uint	line:1;			/* generate line markers */
 	uint	warn:1;			/* compiler warnings */
 };
 
@@ -81,40 +81,41 @@ struct state_options			/* run-time state options */
 
 struct token				/* for the lexer and parser */
 {
-	char	*str;
-	char	*file;
-	int	line;
+	char		*str;
+	const char	*file;
+	int		line;
 };
 
 struct when				/* extra data for when clauses */
 {
-	Expr	*next_state;		/* declaration of target state */
-	VarList	*var_list;		/* list of local variables */
+	Expr		*next_state;	/* declaration of target state */
+	VarList		*var_list;	/* list of local variables */
 };
 
 struct state				/* extra data for state clauses */
 {
 	int		index;		/* index in array of seqState structs */
+	uint		is_target;	/* is this state a target state? */
 	StateOptions	options;	/* state options */
 	VarList		*var_list;	/* list of 'local' variables */
 };
 
 struct state_set			/* extra data for state set clauses */
 {
-	int	num_states;		/* number of states */
-	int	num_delays;		/* number of delays */
-	VarList	*var_list;		/* list of 'local' variables */
+	int		num_states;	/* number of states */
+	int		num_delays;	/* number of delays */
+	VarList		*var_list;	/* list of 'local' variables */
 };
 
 struct expression			/* generic syntax node */
 {
-	Expr	*next;			/* list node: next expression */
-	Expr	*last;			/* list node: last expression */
-	Expr	**children;		/* array of children [left,right,...] */
-	int	type;			/* expression type (E_XXX) */
-	char	*value;			/* operator or value string */
-	int	line_num;		/* originating line number */
-	char	*src_file;		/* originating source file */
+	Expr		*next;		/* list node: next expression */
+	Expr		*last;		/* list node: last expression */
+	Expr		**children;	/* array of children [left,right,...] */
+	int		type;		/* expression type (E_XXX) */
+	char		*value;		/* operator or value string */
+	int		line_num;	/* originating line number */
+	const char	*src_file;	/* originating source file */
 	union				/* extra data, depends on type */
 	{
 		Var	*e_var;		/* variable definiton */
