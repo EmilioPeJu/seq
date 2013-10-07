@@ -33,6 +33,8 @@ in the file LICENSE that is included with this distribution.
 #include "seq.h"
 #include "seq_debug.h"
 
+double seq_sync_timeout = 10.0;
+
 static pvStat check_connected(DBCHAN *dbch, PVMETA *meta)
 {
 	if (!dbch->connected)
@@ -61,7 +63,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 	epicsEventId	getSem = ss->getSemId[varId];
 	DBCHAN		*dbch = ch->dbch;
 	PVMETA		*meta = metaPtr(ch,ss);
-	double		tmo = 10.0;
+	double		tmo = seq_sync_timeout;
 
 	/* Anonymous PV and safe mode, just copy from shared buffer.
 	   Note that completion is always immediate, so no distinction
@@ -75,7 +77,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 	/* No named PV and traditional mode => user error */
 	if (!dbch)
 	{
-		errlogSevPrintf(errlogFatal,
+		errlogSevPrintf(errlogMajor,
 			"pvGet(%s): user error (variable not assigned)\n",
 			ch->varName
 		);
@@ -100,13 +102,16 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 			tmo -= (after - before);
 			break;
 		case epicsEventWaitTimeout:
-			errlogSevPrintf(errlogFatal,
+			errlogSevPrintf(errlogMajor,
 				"pvGet(ss %s, var %s, pv %s): failed (timeout "
 				"waiting for other get requests to finish)\n",
 				ss->ssName, ch->varName, dbch->dbName
 			);
 			return pvStatERROR;
 		case epicsEventWaitError:
+			/* try to recover */
+			ss->getReq[varId] = NULL;
+			epicsEventSignal(getSem);
 			errlogSevPrintf(errlogFatal,
 				"pvGet: epicsEventWaitWithTimeout() failure\n");
 			return pvStatERROR;
@@ -117,11 +122,17 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 		switch (epicsEventTryWait(getSem))
 		{
 		case epicsEventWaitOK:
+			if (ss->getReq[varId] != NULL)
+			{
+				/* previous request timed out but user
+				   did not call pvGetComplete */
+				ss->getReq[varId] = NULL;
+			}
 			status = check_connected(dbch, meta);
 			if (status) return epicsEventSignal(getSem), status;
 			break;
 		case epicsEventWaitTimeout:
-			errlogSevPrintf(errlogFatal,
+			errlogSevPrintf(errlogMajor,
 				"pvGet(ss %s, var %s, pv %s): user error "
 				"(there is already a get pending for this variable/"
 				"state set combination)\n",
@@ -129,6 +140,9 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 			);
 			return pvStatERROR;
 		case epicsEventWaitError:
+			/* try to recover */
+			ss->getReq[varId] = NULL;
+			epicsEventSignal(getSem);
 			errlogSevPrintf(errlogFatal,
 				"pvGet: epicsEventTryWait() failure\n");
 			return pvStatERROR;
@@ -139,6 +153,9 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 	req = (PVREQ *)freeListMalloc(sp->pvReqPool);
 	req->ss = ss;
 	req->ch = ch;
+
+	assert(ss->getReq[varId] == NULL);
+	ss->getReq[varId] = req;
 
 	/* Perform the PV get operation with a callback routine specified.
 	   Requesting more than db channel has available is ok. */
@@ -155,6 +172,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 		meta->message = "get failure";
 		errlogSevPrintf(errlogFatal, "pvGet(var %s, pv %s): pvVarGetCallback() failure: %s\n",
 			ch->varName, dbch->dbName, pvVarGetMess(dbch->pvid));
+		ss->getReq[varId] = NULL;
 		freeListFree(sp->pvReqPool, req);
 		epicsEventSignal(getSem);
 		check_connected(dbch, meta);
@@ -164,11 +182,15 @@ epicsShareFunc pvStat epicsShareAPI seq_pvGet(SS_ID ss, VAR_ID varId, enum compT
 	/* Synchronous: wait for completion */
 	if (compType == SYNC)
 	{
+		epicsEventWaitStatus event_status;
+
 		pvSysFlush(sp->pvSys);
-		switch (epicsEventWaitWithTimeout(getSem, tmo))
+		event_status = epicsEventWaitWithTimeout(getSem, tmo);
+		ss->getReq[varId] = NULL;
+		epicsEventSignal(getSem);
+		switch (event_status)
 		{
 		case epicsEventWaitOK:
-			epicsEventSignal(getSem);
 			status = check_connected(dbch, meta);
 			if (status) return status;
 			if (sp->options & OPT_SAFE)
@@ -204,24 +226,26 @@ epicsShareFunc boolean epicsShareAPI seq_pvGetComplete(SS_ID ss, VAR_ID varId)
 
 	if (!ch->dbch)
 	{
-		if (sp->options & OPT_SAFE)
-		{
-			/* Anonymous PVs always complete immediately */
-			return TRUE;
-		}
-		else
-		{
-			errlogSevPrintf(errlogFatal,
+		/* Anonymous PVs always complete immediately */
+		if (!(sp->options & OPT_SAFE))
+			errlogSevPrintf(errlogMajor,
 				"pvGetComplete(%s): user error (variable not assigned)\n",
-				ch->varName
-			);
-			return FALSE;
-		}
+				ch->varName);
+		return TRUE;
+	}
+
+	if (!ss->getReq[varId])
+	{
+		errlogSevPrintf(errlogMinor,
+			"pvGetComplete(%s): no pending get request for this variable\n",
+			ch->varName);
+		return TRUE;
 	}
 
 	switch (epicsEventTryWait(getSem))
 	{
 	case epicsEventWaitOK:
+		ss->getReq[varId] = NULL;
 		epicsEventSignal(getSem);
 		status = check_connected(ch->dbch, metaPtr(ch,ss));
 		/* TODO: returning either TRUE or FALSE here seems wrong. We return TRUE,
@@ -237,9 +261,11 @@ epicsShareFunc boolean epicsShareAPI seq_pvGetComplete(SS_ID ss, VAR_ID varId)
 	case epicsEventWaitTimeout:
 		return FALSE;
 	case epicsEventWaitError:
+		ss->getReq[varId] = NULL;
+		epicsEventSignal(getSem);
 		errlogSevPrintf(errlogFatal, "pvGetComplete: "
 		  "epicsEventTryWait(getSemId[%d]) failure\n", varId);
-	default:
+	default: /* pacify gcc which does not understand the we checked all possibilities */
 		return FALSE;
 	}
 }
@@ -254,7 +280,7 @@ static void *putq_cp(void *dest, const void *src, size_t elemSize)
 	struct putq_cp_arg *arg = (struct putq_cp_arg *)src;
 	CHAN *ch = arg->ch;
 
-	return memcpy(pv_value_ptr(dest, ch->type->getType),
+	return memcpy(pv_value_ptr(dest, ch->type->getType), /*BUG? should that be putType?*/
 		arg->var, ch->type->size * ch->count);
 }
 
@@ -265,7 +291,7 @@ static void anonymous_put(SS_ID ss, CHAN *ch)
 	if (ch->queue)
 	{
 		QUEUE queue = ch->queue;
-		pvType type = ch->type->getType;
+		pvType type = ch->type->getType; /*BUG? should that be putType?*/
 		size_t size = ch->type->size;
 		boolean full;
 		struct putq_cp_arg arg = {ch, var};
@@ -317,7 +343,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 	DBCHAN	*dbch = ch->dbch;
 	PVMETA	*meta = metaPtr(ch,ss);
 	epicsEventId	putSem = ss->putSemId[varId];
-	double	tmo = 10.0;
+	double	tmo = seq_sync_timeout;
 
 	DEBUG("pvPut: pv name=%s, var=%p\n", dbch ? dbch->dbName : "<anonymous>", var);
 
@@ -329,7 +355,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 	}
 	if (!dbch)
 	{
-		errlogSevPrintf(errlogFatal,
+		errlogSevPrintf(errlogMajor,
 			"pvPut(%s): user error (variable not assigned)\n",
 			ch->varName
 		);
@@ -354,13 +380,16 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 			tmo -= (after - before);
 			break;
 		case epicsEventWaitTimeout:
-			errlogSevPrintf(errlogFatal,
+			errlogSevPrintf(errlogMajor,
 				"pvPut(ss %s, var %s, pv %s): failed (timeout "
 				"waiting for other put requests to finish)\n",
 				ss->ssName, ch->varName, dbch->dbName
 			);
 			return pvStatERROR;
 		case epicsEventWaitError:
+			/* try to recover */
+			ss->putReq[varId] = NULL;
+			epicsEventSignal(putSem);
 			errlogSevPrintf(errlogFatal,
 				"pvPut: epicsEventWaitWithTimeout() failure\n");
 			return pvStatERROR;
@@ -371,13 +400,19 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 		switch (epicsEventTryWait(putSem))
 		{
 		case epicsEventWaitOK:
+			if (ss->putReq[varId] != NULL)
+			{
+				/* previous request timed out but user
+				   did not call pvPutComplete */
+				ss->putReq[varId] = NULL;
+			}
 			break;
 		case epicsEventWaitTimeout:
 			meta->status = pvStatERROR;
 			meta->severity = pvSevrMAJOR;
 			meta->message = "already one put pending";
 			status = meta->status;
-			errlogSevPrintf(errlogFatal,
+			errlogSevPrintf(errlogMajor,
 				"pvPut(ss %s, var %s, pv %s): user error "
 				"(there is already a put pending for this variable/"
 				"state set combination)\n",
@@ -385,6 +420,9 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 			);
 			return pvStatERROR;
 		case epicsEventWaitError:
+			/* try to recover */
+			ss->putReq[varId] = NULL;
+			epicsEventSignal(putSem);
 			errlogSevPrintf(errlogFatal,
 				"pvPut: epicsEventTryWait() failure\n");
 			return pvStatERROR;
@@ -418,6 +456,9 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 		req->ss = ss;
 		req->ch = ch;
 
+		assert(ss->putReq[varId] == NULL);
+		ss->putReq[varId] = req;
+
 		status = pvVarPutCallback(
 				dbch->pvid,		/* PV id */
 				ch->type->putType,	/* data type */
@@ -427,6 +468,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 				req);			/* user arg */
 		if (status != pvStatOK)
 		{
+			ss->putReq[varId] = NULL;
 			errlogSevPrintf(errlogFatal, "pvPut(var %s, pv %s): pvVarPutCallback() failure: %s\n",
 				ch->varName, dbch->dbName, pvVarGetMess(dbch->pvid));
 			freeListFree(sp->pvReqPool, req);
@@ -439,11 +481,15 @@ epicsShareFunc pvStat epicsShareAPI seq_pvPut(SS_ID ss, VAR_ID varId, enum compT
 	/* Synchronous: wait for completion (10s timeout) */
 	if (compType == SYNC)
 	{
+		epicsEventWaitStatus event_status;
+
 		pvSysFlush(sp->pvSys);
-		switch (epicsEventWaitWithTimeout(putSem, tmo))
+		event_status = epicsEventWaitWithTimeout(putSem, tmo);
+		ss->putReq[varId] = NULL;
+		epicsEventSignal(putSem);
+		switch (event_status)
 		{
 		case epicsEventWaitOK:
-			epicsEventSignal(putSem);
 			status = check_connected(dbch, meta);
 			if (status) return status;
 			break;
@@ -475,6 +521,7 @@ epicsShareFunc boolean epicsShareAPI seq_pvPutComplete(
 	boolean		any,
 	boolean		*complete)
 {
+	SPROG		*sp = ss->sprog;
 	boolean		anyDone = FALSE, allDone = TRUE;
 	unsigned	n;
 
@@ -482,23 +529,46 @@ epicsShareFunc boolean epicsShareAPI seq_pvPutComplete(
 	{
 		epicsEventId	putSem = ss->putSemId[varId+n];
 		boolean		done = FALSE;
-		CHAN		*ch = ss->sprog->chan + varId + n;
+		CHAN		*ch = sp->chan + varId + n;
 
-		switch (epicsEventTryWait(putSem))
+		if (!ch->dbch)
 		{
-		case epicsEventWaitOK:
-			epicsEventSignal(putSem);
-			check_connected(ch->dbch, metaPtr(ch,ss));
-			/* TODO: returning either TRUE or FALSE here seems wrong. We return TRUE,
-			   so that state sets don't hang. Still means that user code has to check
-			   status by calling pvStatus and/or pvMessage. */
+		        /* Anonymous PVs always complete immediately */
+			if (!(sp->options & OPT_SAFE))
+			        errlogSevPrintf(errlogMajor,
+				        "pvPutComplete(%s): user error (variable not assigned)\n",
+				        ch->varName);
 			done = TRUE;
-			break;
-		case epicsEventWaitError:
-			errlogSevPrintf(errlogFatal, "pvPutComplete(%s): "
-			  "epicsEventTryWait(putSem[%d]) failure\n", ch->varName, varId);
-		case epicsEventWaitTimeout:
-			break;
+		}
+		else if (!ss->putReq[varId])
+		{
+		        errlogSevPrintf(errlogMinor,
+			        "pvPutComplete(%s): no pending put request for this variable\n",
+			        ch->varName);
+			done = TRUE;
+		}
+		else
+		{
+			switch (epicsEventTryWait(putSem))
+			{
+			case epicsEventWaitOK:
+				ss->putReq[varId] = NULL;
+				epicsEventSignal(putSem);
+				check_connected(ch->dbch, metaPtr(ch,ss));
+				/* TODO: returning either TRUE or FALSE here seems wrong. We return TRUE,
+				   so that state sets don't hang. Still means that user code has to check
+				   status by calling pvStatus and/or pvMessage. */
+				done = TRUE;
+				break;
+			case epicsEventWaitTimeout:
+				break;
+			case epicsEventWaitError:
+				ss->putReq[varId] = NULL;
+				epicsEventSignal(putSem);
+				errlogSevPrintf(errlogFatal, "pvPutComplete(%s): "
+				  "epicsEventTryWait(putSem[%d]) failure\n", ch->varName, varId);
+				break;
+			}
 		}
 
 		anyDone = anyDone || done;
@@ -641,7 +711,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvMonitor(SS_ID ss, VAR_ID varId)
 	}
 	if (!dbch)
 	{
-		errlogSevPrintf(errlogFatal,
+		errlogSevPrintf(errlogMajor,
 			"pvMonitor(%s): user error (variable not assigned)\n",
 			ch->varName
 		);
@@ -667,7 +737,7 @@ epicsShareFunc pvStat epicsShareAPI seq_pvStopMonitor(SS_ID ss, VAR_ID varId)
 	}
 	if (!dbch)
 	{
-		errlogSevPrintf(errlogFatal,
+		errlogSevPrintf(errlogMajor,
 			"pvStopMonitor(%s): user error (variable not assigned)\n",
 			ch->varName
 		);
@@ -984,7 +1054,7 @@ epicsShareFunc boolean epicsShareAPI seq_pvGetQ(SS_ID ss, VAR_ID varId)
 
 	if (!ch->queue)
 	{
-		errlogSevPrintf(errlogFatal,
+		errlogSevPrintf(errlogMajor,
 			"pvGetQ(%s): user error (variable not queued)\n",
 			ch->varName
 		);

@@ -1,6 +1,52 @@
 Known Problems
 ==============
 
+.. _Known_Problems_2.1.13:
+
+Known Problems in Release 2.1.13
+--------------------------------
+
+Building the tests fails with older base releases (e.g. 3.14.8).
+
+It also fails on solaris/sparc. The reason in this case is that the
+compiler sometimes generates an empty struct definition (i.e. one with
+no members), which the compiler on this architecture doesn't like.
+
+The pvGetComplete and pvPutComplete functions contain a serious bug
+that was introduced in release 2.1.13. The effect is that sometimes
+these functions return a wrong result: they can return TRUE when in
+fact the callback from CA did not yet arrive, which is particularly
+bad with pvGetComplete, since it can mean that if the pvGetComplete is
+used in a when clause then in the code block that follows the result
+is not yet available.
+
+Also note that non-safe mode, this can lead to a race condition
+between update from the CA callback and access from the program,
+possibly corrupting the variable's content. This has always been true
+for monitored variables, but not when using asynchronous pvGet.
+
+(These problems are fixed in 2.1.14.)
+
+
+.. _Known_Problems_2.1.12:
+
+Known Problems in Release 2.1.12
+--------------------------------
+
+If a synchronous pvGet (or pvPut) ever fails to get a callback from
+channel access, then all subsequent attempts to do pvGets on that
+channel will fail.
+
+Carl Lionberger <calionberger@lbl.gov>, who reported this problem,
+also found the reason: the semaphore that makes the state set block
+until the CA callback arrives, times out but is never signalled, so
+the variable never recovers from the situation.
+
+This problem is probably present in all releases of the 2.1 branch.
+
+The problem has been fixed in version 2.1.13, see
+:ref:`Release_Notes_2.1.13`.
+
 .. _Known_Problems_2.1.10:
 
 Known Problems in Release 2.1.10
