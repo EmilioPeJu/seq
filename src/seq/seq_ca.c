@@ -364,14 +364,22 @@ void seq_disconnect(SPROG *sp)
 pvStat seq_monitor(CHAN *ch, boolean on)
 {
 	DBCHAN	*dbch = ch->dbch;
+	SPROG	*sp = ch->sprog;
 	pvStat	status;
+	boolean	done;
 
 	assert(ch);
 	assert(dbch);
-	if (on == (dbch->monid != NULL))			/* already done */
-		return pvStatOK;
-	DEBUG("calling pvVarMonitor%s(%p)\n", on?"On":"Off", dbch->pvid);
+
+	epicsMutexMustLock(sp->programLock);
+	done = on == (dbch->monid != NULL);
 	dbch->gotOneMonitor = FALSE;
+	epicsMutexUnlock(sp->programLock);
+
+	if (done)
+		return pvStatOK;
+
+	DEBUG("calling pvVarMonitor%s(%p)\n", on?"On":"Off", dbch->pvid);
 	if (on)
 		status = pvVarMonitorOn(
 				dbch->pvid,		/* pvid */
@@ -476,16 +484,6 @@ void seq_conn_handler(void *var, int connected)
 	   Why each one? Because pvConnectCount and pvMonitorCount should
 	   act like monitored anonymous channels. Any state set might be
 	   using these functions inside a when-condition and it is expected
-	   that such conditions get checked whenever these counts change.
-
-	   Another reason is the pvConnected built-in: a state set with a
-	   when(pvConnected(var)) should be able to make progress
-	   if the channel is now connected.
-
-	   TODO: This is really a crude solution. It would be better to post
-	   special events reserved for pvConnectCount and pvMonitorCount
-	   (if we could assume safe mode is always on we'd just turn them
-	   into anonymous PVs), and to post the regular PV event for the
-	   variable that has connected (or disconnected). */
+	   that such conditions get checked whenever these counts change. */
 	seqWakeup(sp, 0);
 }
