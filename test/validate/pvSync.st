@@ -1,5 +1,5 @@
 /*************************************************************************\
-Copyright (c) 2010-2012 Helmholtz-Zentrum Berlin f. Materialien
+Copyright (c) 2010-2015 Helmholtz-Zentrum Berlin f. Materialien
                         und Energie GmbH, Germany (HZB)
 This file is distributed subject to a Software License Agreement found
 in the file LICENSE that is included with this distribution.
@@ -31,7 +31,7 @@ sync i to ef_i;
 sync a to ef_a;
 
 entry {
-    seq_test_init(4*NTESTS);
+    seq_test_init(5*NTESTS);
     pvSync(x,ef_x);
     efSet(ef_putx);
     efClear(ef_i);
@@ -65,22 +65,20 @@ ss pvSyncY {
     state pvSync {
         when (efTestAndClear(ef_i)) {
             testPass("event on i=%d", i);
-            pvSync(a, ef_a);
-            testDiag("after pvSync(a, ef_a)");
+            pvArraySync(a, NTESTS, ef_a);
+            testDiag("after pvArraySync(a, NTESTS, ef_a)");
             a[i] = i;
-            testOk1(pvPut(a)==pvStatOK);
+            testOk1(pvPut(a[i])==pvStatOK);
             testDiag("after pvPut(a[i])");
         } state pvUnsync
     }
     state pvUnsync {
         when (efTestAndClear(ef_a) && testOk1(a[i]==i)) {
-#if 0
             testOk1(a[i]==i);
-#endif
             if (i >= NTESTS-1) {
                 state done;
             }
-            pvSync(a, NOEVFLAG);
+            pvArraySync(a, NTESTS, NOEVFLAG);
             efSet(ef_putx);
         } state pvSync
     }
