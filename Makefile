@@ -16,13 +16,14 @@ DIRS += examples
 examples_DEPEND_DIRS = src
 
 BRANCH = 2-2
-DEFAULT_REPO = rcsadm@repo.acc.bessy.de:/opt/repositories/controls/darcs/epics/support/seq/branch-$(BRANCH)
+DEFAULT_REPO = /opt/repositories/controls/darcs/epics/support/seq/branch-$(BRANCH)
+GIT_MIRROR = /opt/repositories/controls/git/seq/branch-$(BRANCH)
 SEQ_PATH = www/control/SoftDist/sequencer-$(BRANCH)
 USER_AT_HOST = wwwcsr@www-csr.bessy.de
 DATE = $(shell date -I)
 SNAPSHOT = seq-$(BRANCH)-snapshot-$(DATE)
 SEQ_TAG = seq-$(subst .,-,$(SEQ_RELEASE))
-SEQ_TAG_TIME := $(shell darcs changes --all --xml-output \
+SEQ_TAG_TIME = $(shell darcs changes --all --xml-output \
 	--matches 'exact "TAG $(SEQ_TAG)"' | perl -ne 'print "$$1.$$2" if /date=.(\d{12})(\d{2})/')
 
 include $(TOP)/configure/RULES_TOP
@@ -43,7 +44,11 @@ upload_docs: docs
 
 upload_repo:
 	darcs push $(DEFAULT_REPO)
-	darcs push -a $(USER_AT_HOST):$(SEQ_PATH)/repo/branch-$(BRANCH)
+	cd $(DEFAULT_REPO) && darcs push --all $(USER_AT_HOST):$(SEQ_PATH)/repo/branch-$(BRANCH)
+	cd $(DEFAULT_REPO) && darcs convert export --read-marks $(GIT_MIRROR)/darcs.marks --write-marks $(GIT_MIRROR)/darcs.marks |\
+	  (cd $(GIT_MIRROR) && git fast-import --import-marks=git.marks --export-marks=git.marks)
+	cd $(GIT_MIRROR)/.git && git --bare update-server-info
+	rsync -r --delete $(GIT_MIRROR)/.git/ $(USER_AT_HOST):$(SEQ_PATH)/repo/branch-$(BRANCH).git/
 
 snapshot: upload_repo
 	darcs dist -d $(SNAPSHOT)
@@ -57,4 +62,9 @@ release: upload_docs upload_repo
 	rsync seq-$(SEQ_RELEASE).tar.gz $(USER_AT_HOST):$(SEQ_PATH)/releases/
 	$(RM) seq-$(SEQ_RELEASE).tar.gz
 
-.PHONY: html docs docs.clean upload_docs upload_repo snapshot release
+changelog: force
+	DARCS_ALWAYS_COLOR=0 darcs changes -a --from-tag=. | egrep -v '^(Author|Date|patch)' > changelog
+
+force:
+
+.PHONY: html docs docs.clean upload_docs mirror upload_repo snapshot release
