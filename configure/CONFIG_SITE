@@ -19,6 +19,3 @@ RE2C = $(TOP)/re2c.exe
 else
 RE2C = re2c$(HOSTEXE)
 endif
-
-# Parser generator
-LEMON = $(call PATH_FILTER,$(INSTALL_HOST_BIN)/lemon$(HOSTEXE))

@@ -12,7 +12,9 @@ in the file LICENSE that is included with this distribution.
 #ifndef INCLtypesh
 #define INCLtypesh
 
-#include <epicsVersion.h>
+#include <stdlib.h>
+
+#include "epicsVersion.h"
 
 #include "seq_static_assert.h"
 

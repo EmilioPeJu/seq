@@ -35,6 +35,8 @@ my $db = "../$stem.db";
 
 my $host_arch = $ENV{EPICS_HOST_ARCH};
 
+my $path = $ENV{PATH};
+
 my $top = Cwd::abs_path($ENV{TOP});
 
 open(my $OUT, ">", $target) or die "Can't create $target: $!\n";
@@ -42,36 +44,51 @@ open(my $OUT, ">", $target) or die "Can't create $target: $!\n";
 my $pid = '$pid';
 my $err = '$!';
 
-my $killit;
-if ($host_arch =~ /win32/) {
-  $killit = 'system("taskkill /F /IM softIoc.exe")';
-} else {
-  $killit = 'kill 9, $pid or die "kill failed: $!"';
+my $child_proc = '$child_proc';
+
+my $pathsep = ':';
+if ("$host_arch" =~ /win32/ || "$host_arch" =~ /windows/) {
+  $path =~ s|\\|/|g;  # a trailing \ in PATH causes quoting issues
+  $pathsep = ';';
 }
 
-if ($ioc eq "ioc") {
-  print $OUT <<EOF;
+print $OUT <<EOF;
 \$ENV{HARNESS_ACTIVE} = 1;
 \$ENV{TOP} = '$top';
+\$ENV{PATH} = '$top/bin/$host_arch$pathsep$path';
+\$ENV{EPICS_CA_SERVER_PORT} = 10000 + \$\$ % 30000;
+#only for debugging:
+#print STDERR "port=\$ENV{EPICS_CA_SERVER_PORT}\\n";
+EOF
+
+if ($ioc eq "ioc") {
+  if ("$host_arch" =~ /win32/ || "$host_arch" =~ /windows/) {
+    print $OUT <<EOF;
+require Win32::Process;
+my $child_proc;
+Win32::Process::Create($child_proc, "./$exe", "$exe -S -d $db", 0, 0, ".") || die "Win32::Process::Create() failed: $err";
+my $pid = $child_proc->GetProcessID();
+EOF
+  } else {
+    print $OUT <<EOF;
 my $pid = fork();
 die "fork failed: $err" unless defined($pid);
 if (!$pid) {
   exec("./$exe -S -d $db");
   die "exec failed: $err";
 }
+EOF
+  }
+  print $OUT <<EOF;
 system("$valgrind./$exe -S -t");
-$killit;
+kill 9, $pid or die "kill failed: $err";
 EOF
 } elsif (-r "$db") {
   print $OUT <<EOF;
-\$ENV{HARNESS_ACTIVE} = 1;
-\$ENV{TOP} = '$top';
 system "$valgrind./$exe -S -t -d $db";
 EOF
 } else {
   print $OUT <<EOF;
-\$ENV{HARNESS_ACTIVE} = 1;
-\$ENV{TOP} = '$top';
 system "$valgrind./$exe -S -t";
 EOF
 }

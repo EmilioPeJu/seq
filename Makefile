@@ -22,7 +22,7 @@ SEQ_PATH = www/control/SoftDist/sequencer-$(BRANCH)
 USER_AT_HOST = wwwcsr@www-csr.bessy.de
 DATE = $(shell date -I)
 SNAPSHOT = seq-$(BRANCH)-snapshot-$(DATE)
-SEQ_TAG = seq-$(subst .,-,$(SEQ_RELEASE))
+SEQ_TAG = R$(subst .,-,$(SEQ_RELEASE))
 SEQ_TAG_TIME = $(shell darcs changes --all --xml-output \
 	--matches 'exact "TAG $(SEQ_TAG)"' | perl -ne 'print "$$1.$$2" if /date=.(\d{12})(\d{2})/')
 
@@ -42,6 +42,11 @@ realclean clean: docs.clean
 upload_docs: docs
 	rsync -r -t $(TOP)/html/ $(USER_AT_HOST):$(SEQ_PATH)/
 
+recreate_git_mirror:
+	rm -rf $(GIT_MIRROR)
+	git init $(GIT_MIRROR)
+	touch $(GIT_MIRROR)/git.marks
+
 upload_repo:
 	darcs push $(DEFAULT_REPO)
 	cd $(DEFAULT_REPO) && darcs push --all $(USER_AT_HOST):$(SEQ_PATH)/repo/branch-$(BRANCH)
@@ -50,7 +55,7 @@ upload_repo:
 	cd $(GIT_MIRROR)/.git && git --bare update-server-info
 	rsync -r --delete $(GIT_MIRROR)/.git/ $(USER_AT_HOST):$(SEQ_PATH)/repo/branch-$(BRANCH).git/
 
-snapshot: upload_repo
+snapshot:
 	darcs dist -d $(SNAPSHOT)
 	rsync $(SNAPSHOT).tar.gz $(USER_AT_HOST):$(SEQ_PATH)/releases/
 	ssh $(USER_AT_HOST) 'cd $(SEQ_PATH)/releases && ln -f -s $(SNAPSHOT).tar.gz seq-$(BRANCH)-snapshot-latest.tar.gz'
@@ -67,4 +72,4 @@ changelog: force
 
 force:
 
-.PHONY: html docs docs.clean upload_docs mirror upload_repo snapshot release
+.PHONY: html docs docs.clean upload_docs mirror upload_repo snapshot release recreate_git_mirror

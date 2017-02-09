@@ -25,10 +25,16 @@ snc_SRCS += sym_table.c     # symbol table
 snc_SRCS += builtin.c       # builtin constants and functions
 snc_SRCS += type_check.c    # rudimentary type checker
 
-snc_LIBS += seq pv ca Com
+snc_LIBS += Com
 
-# locally overwrite default value for this variable
 HTMLS += Syntax.txt
+
+# avoid deprecation warnings with base 3.15 and later
+ifeq ($(BASE_3_14),YES)
+LEMON = $(call PATH_FILTER,$(INSTALL_HOST_BIN)/lemon$(HOSTEXE))
+else
+LEMON = $(abspath $(INSTALL_HOST_BIN)/lemon$(HOSTEXE))
+endif
 
 include $(TOP)/configure/RULES
 #----------------------------------------
@@ -38,14 +44,8 @@ vpath %.lem ..
 vpath %.lt ..
 vpath %.txt $(COMMON_DIR)
 
-# this extra dependency needed for 3.14.8 compatibility
-lexer.o: snl.h
-
-snl.c snl.h snl.out: parser_created
-
-parser_created: snl.lem snl.lt $(LEMON)
+%.c %.h: %.lem %.lt $(LEMON)
 	$(LEMON) o=. $<
-	@echo > parser_created
 
 vpath %.re ..
 
@@ -56,7 +56,8 @@ lexer.c: snl.re
 endif
 
 $(COMMON_DIR)/snl.bnf: snl.lem
-	$(LEMON) o=. -g $< > $@
+	$(LEMON) o=. -g $< > $(@F).tmp
+	$(MV) $(@F).tmp $@
 
 $(COMMON_DIR)/Syntax.txt: ../bnf2txt.pl snl.re $(COMMON_DIR)/snl.bnf
 	$(PERL) $^ > $@
@@ -64,14 +65,17 @@ $(COMMON_DIR)/Syntax.txt: ../bnf2txt.pl snl.re $(COMMON_DIR)/snl.bnf
 ifeq ($(BASE_3_14),YES)
 %$(DEP): %.c
 	@-$(MKMF) $(HDEPENDS_FLAGS) -m $*$(DEP) $(HDEPENDS_INCLUDES) $*$(OBJ) $<
+else
+type_check$(DEP): parser_created
 endif
 
-ifdef BASE_3_15
-CLEANS += lexer.c lexer$(DEP) parser_created snl.c snl$(DEP) snl.h
-else
+CLEANS += lexer.c lexer$(DEP) snl.c snl$(DEP) snl.h
+
+# there is no rule like this in base 3.14
+ifeq ($(BASE_3_14),YES)
 ifdef T_A
 clean::
-	@$(RM) lexer.c lexer$(DEP) parser_created snl.c snl$(DEP) snl.h
+	@$(RM) $(CLEANS)
 endif
 endif
 

@@ -481,8 +481,6 @@ epicsShareFunc pvStat seq_pvPutTmo(SS_ID ss, CH_ID chId, enum compType compType,
 	if (status != pvStatOK)
 		return status;
 
-	assert(ss->putReq[chId] == NULL);
-
 	/* Determine number of elements to put (don't try to put more
 	   than db count) */
 	count = dbch->dbCount;
@@ -530,17 +528,15 @@ epicsShareFunc pvStat seq_pvPutTmo(SS_ID ss, CH_ID chId, enum compType compType,
 			check_connected(dbch, meta);
 			return status;
 		}
-	}
 
-	/* Synchronous: wait for completion */
-	if (compType == SYNC)
-	{
-		pvSysFlush(sp->pvSys);
-		status = wait_complete(pvEventPut, ss, ss->putReq + chId, dbch, meta, tmo);
-		if (status != pvStatOK)
-			return status;
+		if (compType == SYNC)			/* wait for completion */
+		{
+			pvSysFlush(sp->pvSys);
+			status = wait_complete(pvEventPut, ss, ss->putReq + chId, dbch, meta, tmo);
+			if (status != pvStatOK)
+				return status;
+		}
 	}
-
 	return pvStatOK;
 }
 
@@ -730,7 +726,8 @@ epicsShareFunc pvStat seq_pvAssign(SS_ID ss, CH_ID chId, const char *pvName)
 
 	if (pvName[0] == 0)	/* new name is empty -> free resources */
 	{
-		if (dbch) {
+		if (dbch)
+		{
 			free(dbch);
 		}
 	}
@@ -1237,16 +1234,28 @@ epicsShareFunc void seq_pvFlushQ(SS_ID ss, CH_ID chId)
 	PROG	*sp = ss->prog;
 	CHAN	*ch = sp->chan + chId;
 	EF_ID	ev_flag = ch->syncedTo;
-	QUEUE	queue = ch->queue;
+
+	if (!ch->queue)
+	{
+		errlogSevPrintf(errlogMinor,
+			"pvFlushQ(%s): user error (not queued)\n",
+			ch->varName);
+		return;
+	}
 
 	DEBUG("pvFlushQ: pv name=%s, count=%d\n",
-		ch->dbch ? ch->dbch->dbName : "<anomymous>", seqQueueUsed(queue));
-	seqQueueFlush(queue);
+		ch->dbch ? ch->dbch->dbName : "<anomymous>",
+		seqQueueUsed(ch->queue));
 
-	epicsMutexMustLock(sp->lock);
-	/* Clear event flag */
-	bitClear(sp->evFlags, ev_flag);
-	epicsMutexUnlock(sp->lock);
+	seqQueueFlush(ch->queue);
+
+	if (ev_flag)
+	{
+		epicsMutexMustLock(sp->lock);
+		/* Clear event flag */
+		bitClear(sp->evFlags, ev_flag);
+		epicsMutexUnlock(sp->lock);
+	}
 }
 
 /*
