@@ -29,12 +29,9 @@ snc_LIBS += Com
 
 HTMLS += Syntax.txt
 
-# avoid deprecation warnings with base 3.15 and later
-ifeq ($(BASE_3_14),YES)
-LEMON = $(call PATH_FILTER,$(INSTALL_HOST_BIN)/lemon$(HOSTEXE))
-else
 LEMON = $(abspath $(INSTALL_HOST_BIN)/lemon$(HOSTEXE))
-endif
+
+HDEPENDS_METHOD = MKMF
 
 include $(TOP)/configure/RULES
 #----------------------------------------
@@ -65,8 +62,6 @@ $(COMMON_DIR)/Syntax.txt: ../bnf2txt.pl snl.re $(COMMON_DIR)/snl.bnf
 ifeq ($(BASE_3_14),YES)
 %$(DEP): %.c
 	@-$(MKMF) $(HDEPENDS_FLAGS) -m $*$(DEP) $(HDEPENDS_INCLUDES) $*$(OBJ) $<
-else
-type_check$(DEP): parser_created
 endif
 
 CLEANS += lexer.c lexer$(DEP) snl.c snl$(DEP) snl.h
