@@ -1,3 +1,3 @@
 #RELEASE.windows-x64 Location of external products
 
-EPICS_BASE=W:/epics/R3.14.12.3/base
+EPICS_BASE=W:/epics/R3.14.12.7/base
